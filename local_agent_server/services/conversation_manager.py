@@ -65,16 +65,29 @@ class ConversationManager:
         self.workspace_manager = workspace_manager or get_workspace_manager()
         self.conversations: dict[str, Conversation] = {}
         
-        # Load configuration from environment
+        # Load API key from environment - check multiple providers
+        # Priority: explicit param > OPENHANDS_API_KEY > provider-specific keys
         self.api_key = api_key or os.getenv("OPENHANDS_API_KEY") or os.getenv("ANTHROPIC_API_KEY")
-        self.model = os.getenv("LLM_MODEL", "anthropic/claude-sonnet-4-5-20250929")
+        
+        # Also check provider-specific API keys
+        if not self.api_key:
+            for key_env in ["OPENROUTER_API_KEY", "GROQ_API_KEY", "CEREBRAS_API_KEY", 
+                        "GOOGLE_API_KEY", "NVIDIA_API_KEY", "ANTHROPIC_API_KEY",
+                        "OPENAI_API_KEY", "LLM_API_KEY"]:
+                if key := os.getenv(key_env):
+                    self.api_key = key
+                    break
+        
+        # Load config from environment using new module
+        from local_agent_server.core.config import get_provider_default_model
+        self.model = os.getenv("LLM_MODEL") or get_provider_default_model()
         self.enable_browser = os.getenv("ENABLE_BROWSER", "true").lower() == "true"
         self.default_agent_type = AgentType.DEFAULT
         
         if not self.api_key:
             logger.warning("No API key configured!")
         
-        logger.info(f"ConversationManager initialized (api_key_configured={bool(self.api_key)})")
+        logger.info(f"ConversationManager initialized (api_key_configured={bool(self.api_key)}, model={self.model})")
     
     def set_api_key(self, api_key: str) -> None:
         """Set the API key."""
@@ -162,7 +175,7 @@ class ConversationManager:
             conv.sdk_conversation.send_message(message)
             conv.status = ConversationStatus.RUNNING
     
-    def run_conversation(self, conversation_id: str) -> None:
+    async def run_conversation(self, conversation_id: str) -> None:
         """Run a conversation (process messages)."""
         conv = self.get_conversation(conversation_id)
         if conv:

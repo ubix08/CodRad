@@ -11,6 +11,15 @@ from openhands.tools.preset.default import get_default_tools
 from pydantic import SecretStr
 
 from ..models.schemas import AgentType
+from ..core.config import (
+    LLM_PROVIDER,
+    get_llm_api_key,
+    get_provider_base_url,
+    get_provider_default_model,
+    LLM_TEMPERATURE,
+    LLM_MAX_TOKENS,
+    LLM_TOP_P,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +66,7 @@ class AgentFactory:
     """
     
     def __init__(self):
-        self.default_model = os.getenv("LLM_MODEL", "anthropic/claude-sonnet-4-5-20250929")
+        self.default_model = get_provider_default_model()
         self.default_enable_browser = os.getenv("ENABLE_BROWSER", "true").lower() == "true"
         self.default_agent_type = AgentType.DEFAULT
         
@@ -66,13 +75,21 @@ class AgentFactory:
         api_key: str,
         model: Optional[str] = None,
         base_url: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        top_p: Optional[float] = None,
     ) -> LLM:
-        """Create an LLM instance."""
+        """Create an LLM instance with full configuration."""
+        # For OpenRouter, litellm handles routing automatically - don't pass base_url
+        effective_model = model or self.default_model
+        if effective_model and effective_model.startswith("openrouter/"):
+            base_url = ""  # Empty allows litellm to route automatically
+        
         return LLM(
             usage_id="local-agent",
-            model=model or self.default_model,
+            model=effective_model,
             api_key=SecretStr(api_key),
-            base_url=base_url or os.getenv("LLM_BASE_URL"),
+            base_url=base_url or "",
         )
     
     def get_tools(self, agent_type: AgentType, enable_browser: bool = True):
@@ -162,8 +179,8 @@ class AgentFactory:
         tools = self.get_tools(agent_type, enable_browser)
         logger.info(f"Loaded {len(tools)} tools (browser={enable_browser}, type={agent_type})")
         
-        # 3. Load skills
-        skills = self.load_skills()
+        # 3. ONLY load default skill - NOT all skills!
+        # Skills are triggered on-demand, not loaded into context
         
         # 4. Add default skill (acts as system prompt)
         default_skill = Skill(
@@ -171,15 +188,22 @@ class AgentFactory:
             content=custom_system_prompt or DEFAULT_SYSTEM_PROMPT,
             trigger=None,  # Always active
         )
-        all_skills = [default_skill] + skills
+        # Only default skill in context
         
         # 5. Build system_message_suffix
         effective_suffix = self.build_system_message_suffix(agent_type)
         
         # 6. Create AgentContext (matches original line 1415-1418)
+        # ORIGINAL OPENHANDS BEHAVIOR:
+        # - load_public_skills=True: loads skills from GitHub repo on-demand
+        # - load_user_skills=True: loads skills from ~/.openhands/skills/
+        # - Skills are triggered by keywords in user message
+        from openhands.sdk.context import AgentContext
         agent_context = AgentContext(
-            skills=all_skills,
+            skills=[default_skill],
             system_message_suffix=effective_suffix,
+            load_public_skills=True,  # Enable public skills
+            load_user_skills=True,  # Enable user skills
         )
         
         # 7. Create Agent (matches original line 1421)
@@ -191,7 +215,7 @@ class AgentFactory:
         
         logger.info(
             f"Created agent: type={agent_type}, "
-            f"skills={len(all_skills)}, "
+            f"skills=1 (triggered on-demand), "
             f"tools={len(tools)}"
         )
         

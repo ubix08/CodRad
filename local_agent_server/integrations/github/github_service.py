@@ -21,6 +21,12 @@ try:
     PYGithub_INSTALLED = True
 except ImportError:
     PYGithub_INSTALLED = False
+    PyGithub = None  # type: ignore
+    PyGithubRepository = None  # type: ignore
+    PyGithubPR = None  # type: ignore
+    PyGithubBranch = None  # type: ignore
+    PyGithubCommit = None  # type: ignore
+    PyGithubIssue = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -473,8 +479,8 @@ class GitHubContentsMixin:
         repo_name: str,
         path: str,
         message: str,
-        branch: str = "main",
         sha: str,
+        branch: str = "main",
     ) -> Dict[str, Any]:
         """Delete a file."""
         if not PYGithub_INSTALLED:

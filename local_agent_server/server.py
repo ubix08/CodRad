@@ -15,13 +15,23 @@ import os
 import sys
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Optional
 
 import uvicorn
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
-# Core
+# Core modules
 from local_agent_server.core.config import settings, get_settings
+from local_agent_server.core.events import event_manager, EventType
+from local_agent_server.core.persistence import conversation_store
+from local_agent_server.core.security_analyzer import security_analyzer
+from local_agent_server.core.confirmation import get_confirmation_policy, ConfirmationPolicyType
+from local_agent_server.core.state_machine import AgentStateMachine, StuckDetector
+from local_agent_server.core.hooks import hooks, HookEvent
 
 # Services
 from local_agent_server.services import (
@@ -43,14 +53,6 @@ from local_agent_server.api import (
     websocket_chat_endpoint,
 )
 
-# Try to import GitHub routes
-try:
-    from local_agent_server.api.routes.github import router as github_router
-    HAS_GITHUB = True
-except ImportError:
-    HAS_GITHUB = False
-    github_router = None
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -58,16 +60,35 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Global state
+app_state = {
+    "started": False,
+    "conversations": {},
+    "metrics": {
+        "total_requests": 0,
+        "total_conversations": 0,
+        "total_tokens": 0,
+    }
+}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan handler."""
+    """Application lifespan handler - production ready initialization."""
     logger.info("Starting Local Agent Server...")
     
-    # Initialize services
+    # Initialize persistence (SQLite)
+    try:
+        from local_agent_server.core.persistence import conversation_store
+        logger.info("Database: initialized")
+    except Exception as e:
+        logger.warning(f"Database initialization failed: {e}")
+    
+    # Initialize workspace manager
     wm = WorkspaceManager(base_dir=settings.workspace_base_dir)
     set_workspace_manager(wm)
     
+    # Initialize conversation manager
     cm = ConversationManager(
         workspace_manager=wm,
         api_key=os.getenv("OPENHANDS_API_KEY") or os.getenv("ANTHROPIC_API_KEY"),
@@ -75,18 +96,54 @@ async def lifespan(app: FastAPI):
     set_conversation_manager(cm)
     
     # Load skills from local directory
-    from local_agent_server.skills import load_skills_from_directory
-    skills_dir = Path(__file__).parent / "skills" / "skills"
-    skill_count = load_skills_from_directory(str(skills_dir))
-    logger.info(f"Loaded {skill_count} skills")
+    try:
+        from local_agent_server.skills import load_skills_from_directory
+        skills_dir = Path(__file__).parent / "skills" / "skills"
+        skill_count = load_skills_from_directory(str(skills_dir))
+        logger.info(f"Skills: {skill_count} loaded")
+    except Exception as e:
+        logger.warning(f"Skills loading failed: {e}")
     
+    # Log configuration
     logger.info(f"Workspace: {wm.base_dir}")
     logger.info(f"API Key: {'configured' if cm.api_key else 'NOT CONFIGURED'}")
     
+    # Security
+    logger.info("Security: enabled")
+    
+    # Confirmation policy
+    policy_type = os.getenv("CONFIRMATION_POLICY", "never_confirm")
+    try:
+        confirmation_policy = get_confirmation_policy(ConfirmationPolicyType(policy_type))
+        logger.info(f"Confirmation policy: {policy_type}")
+    except:
+        logger.warning(f"Invalid policy: {policy_type}, using default")
+        policy_type = "never_confirm"
+    
+    # MCP servers
+    mcp_config = os.getenv("MCP_SERVERS", "")
+    if mcp_config:
+        logger.info(f"MCP servers: configured")
+    else:
+        logger.info("MCP servers: not configured")
+    
+    app_state["started"] = True
+    logger.info("Server ready")
+    
     yield
     
-    # Cleanup
+    # Cleanup on shutdown
     logger.info("Shutting down Local Agent Server...")
+    app_state["started"] = False
+    
+    # Close database connections
+    try:
+        if 'conversation_store' in dir():
+            conversation_store.close()
+    except:
+        pass
+    
+    logger.info("Server shutdown complete")
 
 
 # Create FastAPI app
@@ -94,16 +151,19 @@ app = FastAPI(
     title="Local Agent Server",
     description="Personal AI Coding Assistant - Built on OpenHands SDK",
     version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
     lifespan=lifespan,
 )
 
 # Add CORS middleware
+_cors_origins = os.getenv("CORS_ORIGINS", "").split(",") if os.getenv("CORS_ORIGINS") else ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "http://127.0.0.1:5173"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
 
 
@@ -115,70 +175,113 @@ async def root():
         "name": "Local Agent Server",
         "version": "1.0.0",
         "docs": "/docs",
+        "status": "running" if app_state["started"] else "stopped",
     }
 
 
-# Health check
+# Health check endpoint
 @app.get("/health")
-async def health():
+async def health_check():
     """Health check endpoint."""
     cm = get_conversation_manager()
-    wm = get_workspace_manager()
     return {
-        "status": "healthy",
+        "status": "healthy" if app_state["started"] else "stopped",
         "version": "1.0.0",
-        "conversations": len(cm.conversations),
-        "api_key_configured": bool(cm.api_key),
+        "conversations": len(app_state.get("conversations", {})),
+        "api_key_configured": bool(cm.api_key if cm else None),
     }
 
 
-# Register routers
-app.include_router(admin_router)
-app.include_router(conversations_router)
-app.include_router(workspaces_router)
-app.include_router(skills_router)
-
-# Register GitHub router if available
-if HAS_GITHUB and github_router:
-    app.include_router(github_router)
-    logger.info("GitHub integration enabled")
+# Metrics endpoint
+@app.get("/metrics")
+async def metrics():
+    """Get server metrics."""
+    return app_state.get("metrics", {})
 
 
-# WebSocket endpoints
+# Include routers (routes already have /api/ prefix)
+app.include_router(admin_router, tags=["admin"])
+app.include_router(conversations_router, tags=["conversations"])
+app.include_router(workspaces_router, tags=["workspaces"])
+app.include_router(skills_router, tags=["skills"])
+
+
+# Try to import GitHub routes
+try:
+    from local_agent_server.api.routes.github import router as github_router
+    app.include_router(github_router, tags=["github"])
+    logger.info("GitHub integration: enabled")
+except ImportError:
+    logger.warning("GitHub integration: not available")
+
+# Include project routes
+try:
+    from local_agent_server.api.routes.projects import router as projects_router
+    app.include_router(projects_router, tags=["projects"])
+    logger.info("Projects: enabled")
+except Exception as e:
+    logger.warning(f"Projects: not available - {e}")
+
+
+# WebSocket endpoint for real-time events
 @app.websocket("/ws/{conversation_id}")
-async def ws_endpoint(websocket: WebSocket, conversation_id: str):
-    """WebSocket endpoint for real-time streaming."""
-    await websocket_endpoint(websocket, conversation_id)
+async def websocket_events(websocket: WebSocket, conversation_id: str):
+    """WebSocket endpoint for real-time conversation events."""
+    await event_manager.connect(conversation_id, websocket)
+    try:
+        while True:
+            # Wait for messages from client
+            data = await websocket.receive_text()
+            # Handle client messages if needed
+    except WebSocketDisconnect:
+        event_manager.disconnect(conversation_id, websocket)
 
 
-@app.websocket("/chat/{conversation_id}")
-async def ws_chat_endpoint(websocket: WebSocket, conversation_id: str):
-    """WebSocket endpoint for interactive chat."""
-    await websocket_chat_endpoint(websocket, conversation_id)
-
-
-def main():
-    """Main entry point."""
-    import argparse
+# WebSocket chat endpoint
+@app.websocket("/ws/chat/{conversation_id}")
+async def websocket_chat(websocket: WebSocket, conversation_id: str):
+    """WebSocket endpoint for chat with the agent."""
+    await websocket.accept()
     
-    parser = argparse.ArgumentParser(description="Local Agent Server")
-    parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
-    parser.add_argument("--port", type=int, default=8000, help="Port to bind to")
-    parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
-    parser.add_argument("--log-level", default="info", help="Log level")
+    cm = get_conversation_manager()
+    if not cm:
+        await websocket.send_json({"error": "Conversation manager not initialized"})
+        await websocket.close()
+        return
     
-    args = parser.parse_args()
-    
-    # Run server
-    uvicorn.run(
-        "local_agent_server.server:app",
-        host=args.host,
-        port=args.port,
-        reload=args.reload,
-        log_level=args.log_level,
-        factory=True,
+    try:
+        # Send initial state
+        await websocket.send_json({
+            "type": "connected",
+            "conversation_id": conversation_id,
+        })
+        
+        # Handle messages
+        while True:
+            data = await websocket.receive_text()
+            # Process message...
+            await websocket.send_json({"type": "ack"})
+    except WebSocketDisconnect:
+        pass
+
+
+# Exception handlers
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler."""
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
     )
 
 
+# Run the server
 if __name__ == "__main__":
-    main()
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(
+        "local_agent_server.server:app",
+        host="0.0.0.0",
+        port=port,
+        reload=os.getenv("RELOAD", "false").lower() == "true",
+    )

@@ -11,6 +11,7 @@ from local_agent_server.models.schemas import (
     SendMessageRequest,
 )
 from local_agent_server.services import get_conversation_manager
+from local_agent_server.core.auth import verify_api_key
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
@@ -18,16 +19,17 @@ router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 @router.post("", response_model=ConversationResponse, status_code=201)
 async def create_conversation(request: Request, body: CreateConversationRequest):
     """Create a new conversation."""
-    cm = get_conversation_manager()
+    # Verify API key first
+    await verify_api_key(request)
     
-    # Get API key from body or header
-    api_key = body.workspace_dir if hasattr(body, 'workspace_dir') else None
+    cm = get_conversation_manager()
+
+    # Get API key from header for LLM use
     if not cm.api_key:
-        # Try to get from Authorization header
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             cm.set_api_key(auth[7:])
-    
+
     conv = cm.create_conversation(
         workspace_dir=body.workspace_dir,
         initial_message=body.initial_message,
@@ -111,7 +113,7 @@ async def run_conversation(conversation_id: str):
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     
-    # Run in background
+    # Run in background - properly await the coroutine
     import asyncio
     asyncio.create_task(cm.run_conversation(conversation_id))
     
