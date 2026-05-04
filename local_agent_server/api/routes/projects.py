@@ -170,13 +170,86 @@ async def delete_session(project_id: str, session_id: str):
 @router.post("/{project_id}/sessions/{session_id}/run")
 async def run_session(project_id: str, session_id: str):
     """Run a session (start the agent)."""
-    # This will integrate with conversation_manager
-    # For now, return placeholder
-    return {
-        "status": "started",
-        "session_id": session_id,
-        "project_id": project_id,
-    }
+    from local_agent_server.services.conversation_manager import get_conversation_manager
+    from fastapi.responses import JSONResponse
+    
+    cm = get_conversation_manager()
+    
+    if not cm.api_key:
+        return JSONResponse(
+            status_code=500,
+            content={"error": "No API key configured"}
+        )
+    
+    # Create or get conversation for this session
+    # Use session_id as conversation_id
+    existing_conv = cm.get_conversation(session_id)
+    
+    if not existing_conv:
+        # Get project workspace
+        from local_agent_server.services.project_manager import get_project_manager
+        pm = get_project_manager()
+        project = pm.get_project(project_id)
+        
+        if not project.exists:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Project not found"}
+            )
+        
+        # Get workspace for project
+        workspace = pm.get_workspace_for_project(project_id)
+        
+        if not workspace:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Project workspace not found"}
+            )
+        
+        # Create agent and conversation
+        from openhands.sdk import Conversation as SDKConversation
+        from local_agent_server.services.agent_factory import get_agent_factory
+        
+        factory = get_agent_factory()
+        agent = factory.create_agent(
+            api_key=cm.api_key,
+            agent_type=cm.default_agent_type,
+            enable_browser=cm.enable_browser,
+            model=cm.model,
+        )
+        
+        # Create SDK conversation
+        sdk_conversation = SDKConversation(
+            agent=agent,
+            workspace=workspace,
+        )
+        
+        # Create conversation in manager
+        from local_agent_server.services.conversation_manager import Conversation as Conv
+        conv = Conv(
+            id=session_id,
+            workspace_dir=str(workspace.working_dir),
+            agent_type=cm.default_agent_type,
+            enable_browser=cm.enable_browser,
+            agent=agent,
+            sdk_conversation=sdk_conversation,
+        )
+        
+        cm.conversations[session_id] = conv
+    
+    # Run the conversation
+    try:
+        cm.conversations[session_id].sdk_conversation.run()
+        return {
+            "status": "started",
+            "session_id": session_id,
+            "project_id": project_id,
+        }
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
 
 
 # Send message to session
