@@ -35,11 +35,11 @@ from local_agent_server.core.hooks import hooks, HookEvent
 
 # Services
 from local_agent_server.services import (
-    WorkspaceManager,
+    ProjectManager,
     ConversationManager,
-    get_workspace_manager,
+    get_project_manager,
     get_conversation_manager,
-    set_workspace_manager,
+    set_project_manager,
     set_conversation_manager,
 )
 
@@ -84,13 +84,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Database initialization failed: {e}")
     
-    # Initialize workspace manager
-    wm = WorkspaceManager(base_dir=settings.workspace_base_dir)
-    set_workspace_manager(wm)
+    # Initialize project manager (uses SDK LocalWorkspace)
+    pm = ProjectManager(workspace_root=settings.workspace_base_dir)
+    set_project_manager(pm)
     
     # Initialize conversation manager
     cm = ConversationManager(
-        workspace_manager=wm,
+        project_manager=pm,
         api_key=os.getenv("OPENHANDS_API_KEY") or os.getenv("ANTHROPIC_API_KEY"),
     )
     set_conversation_manager(cm)
@@ -105,7 +105,8 @@ async def lifespan(app: FastAPI):
         logger.warning(f"Skills loading failed: {e}")
     
     # Log configuration
-    logger.info(f"Workspace: {wm.base_dir}")
+    logger.info(f"Workspace: {pm.workspace_root}")
+    logger.info(f"Projects: {len(pm.list_projects())} projects")
     logger.info(f"API Key: {'configured' if cm.api_key else 'NOT CONFIGURED'}")
     
     # Security

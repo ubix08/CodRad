@@ -1,4 +1,4 @@
-"""Settings panel - Provider, Model, Skills configuration."""
+// Settings panel - Provider, Model, Skills configuration.
 
 import { useState, useEffect } from 'react'
 

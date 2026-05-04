@@ -1,4 +1,4 @@
-"""Conversation manager service - Manages all conversations."""
+"""Conversation manager service - Manages all conversations using SDK LocalWorkspace."""
 
 import os
 import uuid
@@ -9,10 +9,11 @@ from typing import Optional, List, Any
 import logging
 
 from openhands.sdk import Conversation as SDKConversation
+from openhands.sdk.workspace import LocalWorkspace
 
 from ..models.schemas import AgentType, ConversationStatus, MessageRole
 from .agent_factory import get_agent_factory
-from .workspace_manager import get_workspace_manager
+from .project_manager import get_project_manager
 
 logger = logging.getLogger(__name__)
 
@@ -45,24 +46,23 @@ class Conversation:
 
 
 class ConversationManager:
-    """Manages all conversations.
+    """Manages all conversations using SDK LocalWorkspace.
     
-    Replicates the conversation handling from:
-    openhands/app_server/app_conversation/live_status_app_conversation_service.py
+    Uses ProjectManager with SDK LocalWorkspace for project management.
     """
     
     def __init__(
         self,
-        workspace_manager: Optional[Any] = None,
+        project_manager: Optional[Any] = None,
         api_key: Optional[str] = None,
     ):
         """Initialize the conversation manager.
         
         Args:
-            workspace_manager: Workspace manager instance
+            project_manager: Project manager instance (uses SDK LocalWorkspace)
             api_key: API key for LLM (falls back to env var)
         """
-        self.workspace_manager = workspace_manager or get_workspace_manager()
+        self.project_manager = project_manager or get_project_manager()
         self.conversations: dict[str, Conversation] = {}
         
         # Load API key from environment - check multiple providers
@@ -99,7 +99,7 @@ class ConversationManager:
     
     def create_conversation(
         self,
-        workspace_dir: Optional[str] = None,
+        project_name: str,
         initial_message: Optional[str] = None,
         agent_type: Optional[AgentType] = None,
         enable_browser: Optional[bool] = None,
@@ -107,9 +107,7 @@ class ConversationManager:
     ) -> Conversation:
         """Create a new conversation with an agent.
         
-        This replicates:
-        - _build_start_conversation_request() from original
-        - ConversationSettings.create_request() from original
+        Uses SDK LocalWorkspace via ProjectManager.
         """
         if not self.api_key:
             raise ValueError("API key not configured")
@@ -119,10 +117,17 @@ class ConversationManager:
         enable_browser = enable_browser if enable_browser is not None else self.enable_browser
         
         conversation_id = str(uuid.uuid4())
-        workspace = workspace_dir or self.workspace_manager.create_workspace(conversation_id)
+        
+        # Get project workspace from SDK ProjectManager
+        project = self.project_manager.get_project(project_name)
+        if not project.exists:
+            # Create project if it doesn't exist
+            project.create()
+        
+        # Get SDK LocalWorkspace for this project
+        workspace = self.project_manager.get_workspace_for_project(project_name)
         
         # Create agent with exact same config as original
-        # Replicates lines ~1407-1425 from original
         factory = get_agent_factory()
         agent = factory.create_agent(
             api_key=self.api_key,
@@ -131,7 +136,7 @@ class ConversationManager:
             model=model or self.model,
         )
         
-        # Create SDK conversation (same as original)
+        # Create SDK conversation with SDK LocalWorkspace
         sdk_conversation = SDKConversation(
             agent=agent,
             workspace=workspace,
@@ -139,7 +144,7 @@ class ConversationManager:
         
         conversation = Conversation(
             id=conversation_id,
-            workspace_dir=workspace,
+            workspace_dir=str(workspace.path) if workspace else "",
             agent_type=agent_type,
             enable_browser=enable_browser,
             agent=agent,
@@ -187,10 +192,13 @@ class ConversationManager:
                 logger.error(f"Error running conversation {conversation_id}: {e}")
     
     def delete_conversation(self, conversation_id: str) -> None:
-        """Delete a conversation."""
+        """Delete a conversation.
+        
+        Note: Sessions are stored in project directories, 
+        not deleted when conversation is deleted.
+        """
         if conversation_id in self.conversations:
             del self.conversations[conversation_id]
-            self.workspace_manager.delete_workspace(conversation_id)
             logger.info(f"Deleted conversation {conversation_id}")
     
     def get_events(self, conversation_id: str) -> List[dict]:
@@ -244,9 +252,9 @@ def get_conversation_manager() -> ConversationManager:
     """Get the global conversation manager instance."""
     global _conversation_manager
     if _conversation_manager is None:
-        from .workspace_manager import get_workspace_manager
+        from .project_manager import get_project_manager
         _conversation_manager = ConversationManager(
-            workspace_manager=get_workspace_manager()
+            project_manager=get_project_manager()
         )
     return _conversation_manager
 

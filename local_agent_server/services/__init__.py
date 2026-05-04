@@ -12,13 +12,19 @@ from local_agent_server.services.workspace_manager import (
     get_workspace_manager,
     set_workspace_manager,
 )
+from local_agent_server.services.project_manager import (
+    ProjectManager,
+    Project,
+    get_project_manager,
+    set_project_manager,
+)
 
 __all__ = [
     # Agent factory
     "AgentFactory",
     "agent_factory",
     "get_agent_factory",
-    # Workspace manager
+    # Workspace manager (legacy - for existing conversations)
     "WorkspaceManager",
     "get_workspace_manager",
     "set_workspace_manager",
@@ -27,4 +33,9 @@ __all__ = [
     "ConversationManager",
     "get_conversation_manager",
     "set_conversation_manager",
+    # Project manager (SDK LocalWorkspace)
+    "ProjectManager",
+    "Project",
+    "get_project_manager",
+    "set_project_manager",
 ]
