@@ -40,7 +40,8 @@ function App() {
   // Connect WebSocket when session is created
   useEffect(() => {
     if (currentSession) {
-      connectWebSocket(currentSession.session_id)
+      const sessionId = currentSession.id || currentSession.session_id
+      connectWebSocket(sessionId)
     }
   }, [currentSession])
 
@@ -127,8 +128,8 @@ function App() {
   // Select existing session
   const selectSession = (session) => {
     setCurrentSession(session)
-    // Load session messages
-    loadSessionMessages(session.session_id)
+    // Load session messages - use id or session_id
+    loadSessionMessages(session.id || session.session_id)
     setShowSessions(false)
   }
 
@@ -229,6 +230,9 @@ function App() {
   }
 
   const sendMessage = async (content) => {
+    // Get session ID - handle both id and session_id
+    const sessionId = currentSession?.id || currentSession?.session_id
+    
     // Add user message immediately
     setMessages(prev => [...prev, {
       role: 'user',
@@ -237,10 +241,10 @@ function App() {
     }])
 
     // Save message to session
-    if (currentSession && currentProject) {
+    if (currentSession && currentProject && sessionId) {
       try {
         await fetch(
-          `${API_BASE}/projects/${currentProject.id}/sessions/${currentSession.session_id}/messages`,
+          `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}/messages`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -259,11 +263,11 @@ function App() {
         content
       }))
       setIsLoading(true)
-    } else if (currentSession && currentProject) {
+    } else if (currentSession && currentProject && sessionId) {
       // Fallback: start the agent
       try {
         await fetch(
-          `${API_BASE}/projects/${currentProject.id}/sessions/${currentSession.session_id}/run`,
+          `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}/run`,
           { method: 'POST' }
         )
         setIsLoading(true)

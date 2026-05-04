@@ -45,13 +45,13 @@ function SessionList({ sessions, onSelectSession, onCreateSession }) {
         ) : (
           sessions.map(session => (
             <div
-              key={session.id}
+              key={session.id || session.session_id}
               className="session-card"
               onClick={() => onSelectSession(session)}
             >
               <div className="session-icon">💬</div>
               <div className="session-info">
-                <h3>{session.title || session.id}</h3>
+                <h3>{session.title || session.id || session.session_id}</h3>
                 <p>
                   {session.created_at 
                     ? new Date(session.created_at).toLocaleString()
