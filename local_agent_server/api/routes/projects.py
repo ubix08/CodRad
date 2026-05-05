@@ -175,38 +175,28 @@ async def run_session(project_id: str, session_id: str):
     from fastapi.responses import JSONResponse
     
     cm = get_conversation_manager()
+    pm = get_project_manager()
     
     if not cm.api_key:
-        return JSONResponse(
-            status_code=500,
-            content={"error": "No API key configured"}
-        )
+        return JSONResponse(status_code=500, content={"error": "No API key configured"})
     
-    # Get project manager - needed for both paths
-    pm = get_project_manager()
     project = pm.get_project(project_id)
-    
     if not project.exists:
-        return JSONResponse(
-            status_code=404,
-            content={"error": "Project not found"}
-        )
+        return JSONResponse(status_code=404, content={"error": "Project not found"})
     
     # Get or create conversation
     existing_conv = cm.get_conversation(session_id)
-    sdk_conversation = None
+    sdk_conv = None
+    workspace = None
     
-    if not existing_conv:
-        # Get workspace for project
+    if existing_conv:
+        sdk_conv = existing_conv.sdk_conversation
+    else:
+        # Create new
         workspace = pm.get_workspace_for_project(project_id)
-        
         if not workspace:
-            return JSONResponse(
-                status_code=404,
-                content={"error": "Project workspace not found"}
-            )
+            return JSONResponse(status_code=404, content={"error": "Workspace not found"})
         
-        # Create agent and conversation
         from openhands.sdk import Conversation as SDKConversation
         from local_agent_server.services.agent_factory import get_agent_factory
         
@@ -218,59 +208,28 @@ async def run_session(project_id: str, session_id: str):
             model=cm.model,
         )
         
-        sdk_conversation = SDKConversation(
-            agent=agent,
-            workspace=workspace,
-        )
+        sdk_conv = SDKConversation(agent=agent, workspace=workspace)
         
-        # Create conversation in manager
         from local_agent_server.services.conversation_manager import Conversation as Conv
         conv = Conv(
             id=session_id,
             workspace_dir=str(workspace.working_dir),
             agent_type=cm.default_agent_type,
-            enable_browser=cm.enable_browser,
+            enable_browser=False,
             agent=agent,
-            sdk_conversation=sdk_conversation,
+            sdk_conversation=sdk_conv,
         )
-        
         cm.conversations[session_id] = conv
-        existing_conv = conv
     
-    # Get sdk_conversation from existing conv if needed
-    if sdk_conversation is None:
-        sdk_conversation = existing_conv.sdk_conversation
+    if not sdk_conv:
+        return JSONResponse(status_code=500, content={"error": "Failed to get conversation"})
     
-    # Load messages from session before running
+    # Run
     try:
-        from local_agent_server.services.session_manager import get_session_manager
-        sm = get_session_manager(pm)
-        session = sm.get_session(session_id)
-        messages = session.get_messages() if session else []
-        
-        # Add messages to conversation if any
-        if messages:
-            for msg in messages:
-                sdk_conversation.add_message(
-                    role=msg.get("role", "user"),
-                    content=msg.get("content", ""),
-                )
+        sdk_conv.run()
+        return JSONResponse(content={"status": "started", "session_id": session_id, "project_id": project_id})
     except Exception as e:
-        logger.warning(f"Could not load session messages: {e}")
-    
-    # Run the conversation
-    try:
-        sdk_conversation.run()
-        return JSONResponse(content={
-            "status": "started",
-            "session_id": session_id,
-            "project_id": project_id,
-        })
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"error": str(e)}
-        )
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 # Send message to session
