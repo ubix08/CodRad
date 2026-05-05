@@ -188,7 +188,6 @@ async def create_session(project_id: str, request: CreateSessionRequest):
 @router.get("/{project_id}/sessions/{session_id}")
 async def get_session(project_id: str, session_id: str):
     """Get session details and messages from SDK conversation."""
-    # Try conversation manager first
     from local_agent_server.services.conversation_manager import get_conversation_manager
     cm = get_conversation_manager()
     conv = cm.get_conversation(session_id)
@@ -212,12 +211,42 @@ async def get_session(project_id: str, session_id: str):
             # Only look for Message events with content
             event_type = type(event).__name__
             
-            # Skip non-message events
-            if event_type not in ('Message', 'UserMessage', 'AssistantMessage'):
+            # Skip non-message events (SystemPromptEvent, etc)
+            if event_type in ('SystemPromptEvent',):
                 continue
             
-            # Get content from message
-            content = getattr(event, 'content', None)
+            # For MessageEvent, check the source and llm_message attributes
+            if event_type == 'MessageEvent':
+                source = getattr(event, 'source', None)
+                llm_msg = getattr(event, 'llm_message', None)
+                
+                if llm_msg:
+                    # Get content from the Message object
+                    if hasattr(llm_msg, 'content'):
+                        # It's a Message with TextContent items
+                        content_parts = []
+                        for part in getattr(llm_msg, 'content', []):
+                            if hasattr(part, 'text'):
+                                content_parts.append(part.text)
+                            else:
+                                content_parts.append(str(part))
+                        content = '\n'.join(content_parts) if content_parts else str(llm_msg)
+                    else:
+                        content = str(llm_msg)
+                else:
+                    content = None
+                
+                role = source if source else 'user'
+                # Map source to role for frontend (agent -> assistant)
+                if role == 'agent':
+                    role = 'assistant'
+            else:
+                # Handle legacy types
+                content = getattr(event, 'content', None)
+                role = 'assistant'
+                if 'User' in event_type:
+                    role = 'user'
+            
             if not content:
                 continue
             content = str(content)[:5000]
@@ -225,11 +254,6 @@ async def get_session(project_id: str, session_id: str):
             # Skip system prompts/tools
             if 'Tools Available:' in content or 'Message from User' in content:
                 continue
-            
-            # Determine role from event class
-            role = 'assistant'
-            if 'User' in event_type:
-                role = 'user'
             
             if content and len(content) > 10:
                 messages.append({'role': role, 'content': content})
