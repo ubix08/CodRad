@@ -144,7 +144,7 @@ class ConversationManager:
         
         conversation = Conversation(
             id=conversation_id,
-            workspace_dir=str(workspace.path) if workspace else "",
+            workspace_dir=str(workspace.working_dir) if workspace else "",
             agent_type=agent_type,
             enable_browser=enable_browser,
             agent=agent,

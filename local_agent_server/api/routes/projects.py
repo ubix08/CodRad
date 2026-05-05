@@ -170,7 +170,7 @@ async def create_session(project_id: str, request: CreateSessionRequest):
         from local_agent_server.services.conversation_manager import Conversation as Conv
         conv = Conv(
             id=session.session_id,
-            workspace_dir=str(workspace.path),
+            workspace_dir=str(workspace.working_dir),
             agent_type=cm.default_agent_type,
             enable_browser=cm.enable_browser,
             agent=agent,
