@@ -149,7 +149,7 @@ function App() {
     }
   }
 
-  // Connect WebSocket
+  // Connect WebSocket (use /ws/chat/ endpoint for actual messaging)
   const connectWebSocket = (sessionId) => {
     if (wsRef.current) {
       wsRef.current.close()
@@ -157,14 +157,16 @@ function App() {
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const ws = new WebSocket(
-      `${protocol}//${window.location.host}/ws/${sessionId}`
+      `${protocol}//${window.location.host}/ws/chat/${sessionId}`
     )
     
     ws.onopen = () => {
+      console.log('WebSocket connected')
       setConnected(true)
     }
     
     ws.onmessage = (event) => {
+      console.log('WebSocket message:', event.data)
       try {
         const data = JSON.parse(event.data)
         handleWebSocketMessage(data)
@@ -178,7 +180,8 @@ function App() {
       }
     }
     
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      console.log('WebSocket closed:', event.code, event.reason)
       setConnected(false)
     }
     
@@ -190,7 +193,25 @@ function App() {
   }
 
   const handleWebSocketMessage = (data) => {
+    console.log('Handling message:', data)
+    
     // Handle different message types
+    if (data.type === 'connected') {
+      setConnected(true)
+      return
+    }
+    
+    if (data.type === 'ack') {
+      // Message acknowledged
+      return
+    }
+    
+    if (data.type === 'response') {
+      // Agent completed
+      setIsLoading(false)
+      return
+    }
+    
     if (data.type === 'status') {
       setIsLoading(data.status === 'running')
       return
@@ -244,7 +265,17 @@ function App() {
 
     setIsLoading(true)
     
-    // Use REST API (works without WebSocket)
+    // Try WebSocket first if connected
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(JSON.stringify({ content }))
+        return
+      } catch (err) {
+        console.error('WebSocket send error:', err)
+      }
+    }
+    
+    // Fallback to REST API
     try {
       // 1. Save message
       await fetch(
