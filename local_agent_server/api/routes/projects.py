@@ -138,42 +138,28 @@ async def create_session(project_id: str, request: CreateSessionRequest):
 
 @router.get("/{project_id}/sessions/{session_id}")
 async def get_session(project_id: str, session_id: str):
-    """Get session details and messages."""
-    pm = get_project_manager()
-    sm = get_session_manager(pm)
-    session = sm.get_session(project_id, session_id)
+    """Get session details and messages from SDK conversation."""
+    # Get from conversation manager (SDK native)
+    from local_agent_server.services.conversation_manager import get_conversation_manager
+    cm = get_conversation_manager()
+    conv = cm.get_conversation(session_id)
     
-    if not session:
+    if not conv or not conv.sdk_conversation:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    # Get messages from session file (primary)
-    messages = session.get_messages()
-    
-    # If no messages from file, try SDK state.events (fallback)
-    if not messages:
-        from local_agent_server.services.conversation_manager import get_conversation_manager
-        cm = get_conversation_manager()
-        conv = cm.get_conversation(session_id)
-        if conv and conv.sdk_conversation and hasattr(conv.sdk_conversation.state, 'events'):
-            try:
-                # SDK stores events in state.events
-                events = conv.sdk_conversation.state.events
-                messages = []
-                for event in events:
-                    # Events have content, convert to dict
-                    if hasattr(event, 'content'):
-                        messages.append({
-                            'role': getattr(event, 'sender', 'user'),
-                            'content': str(event.content)[:5000],
-                        })
-            except Exception:
-                pass
+    # Get messages from SDK state.events
+    messages = []
+    for event in conv.sdk_conversation.state.events:
+        if hasattr(event, 'content'):
+            messages.append({
+                'role': getattr(event, 'sender', 'assistant'),
+                'content': str(event.content)[:5000],
+            })
     
     return {
-        "session_id": session.session_id,
+        "session_id": session_id,
         "project_id": project_id,
-        "workspace_dir": session.get_workspace_dir(),
-        "meta": session.get_meta(),
+        "workspace_dir": conv.workspace_dir,
         "messages": messages,
     }
 
@@ -282,24 +268,6 @@ async def run_session(project_id: str, session_id: str):
     try:
         cm.conversations[session_id].sdk_conversation.run()
         
-        # Save messages from SDK to session file for frontend polling
-        pm = get_project_manager()
-        sm = get_session_manager(pm)
-        session = sm.get_session(project_id, session_id)
-        
-        if session:
-            sdk_conv = cm.conversations[session_id].sdk_conversation
-            messages = []
-            for event in sdk_conv.state.events:
-                if hasattr(event, 'content'):
-                    messages.append({
-                        'role': getattr(event, 'sender', 'assistant'),
-                        'content': str(event.content)[:5000],
-                    })
-            if messages:
-                session.save_messages(messages)
-                logger.info(f"Saved {len(messages)} messages to session {session_id}")
-        
         return {
             "status": "completed",
             "session_id": session_id,
@@ -316,26 +284,16 @@ async def run_session(project_id: str, session_id: str):
 # Send message to session
 @router.post("/{project_id}/sessions/{session_id}/messages")
 async def send_message(project_id: str, session_id: str, request: SendMessageRequest):
-    """Send a message to a session - adds to SDK conversation."""
-    # First add to session for persistence
-    pm = get_project_manager()
-    sm = get_session_manager(pm)
-    session = sm.get_session(project_id, session_id)
-    
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    # Add to session file
-    session.add_message("user", request.message)
-    
-    # Also add to SDK conversation if it exists
+    """Send a message to SDK conversation."""
     from local_agent_server.services.conversation_manager import get_conversation_manager
     cm = get_conversation_manager()
     conv = cm.get_conversation(session_id)
     
-    if conv and conv.sdk_conversation:
-        # SDK-native way: send message to conversation
-        conv.sdk_conversation.send_message(message=request.message)
+    if not conv or not conv.sdk_conversation:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Send to SDK conversation
+    conv.sdk_conversation.send_message(message=request.message)
     
     return {
         "status": "message_added",
