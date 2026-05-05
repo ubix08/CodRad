@@ -146,12 +146,33 @@ async def get_session(project_id: str, session_id: str):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
+    # Get messages from session file
+    messages = session.get_messages()
+    
+    # If no messages, try to get from conversation manager (SDK native)
+    if not messages:
+        from local_agent_server.services.conversation_manager import get_conversation_manager
+        cm = get_conversation_manager()
+        conv = cm.get_conversation(session_id)
+        if conv and conv.sdk_conversation:
+            messages = []
+            for event in conv.sdk_conversation.state.events:
+                msg_data = {}
+                if hasattr(event, 'role'):
+                    msg_data['role'] = event.role
+                if hasattr(event, 'content'):
+                    msg_data['content'] = str(event.content)[:5000]
+                if hasattr(event, 'timestamp'):
+                    msg_data['timestamp'] = str(event.timestamp)
+                if msg_data:
+                    messages.append(msg_data)
+    
     return {
         "session_id": session.session_id,
         "project_id": project_id,
         "workspace_dir": session.get_workspace_dir(),
         "meta": session.get_meta(),
-        "messages": session.get_messages(),
+        "messages": messages,
     }
 
 
@@ -239,41 +260,9 @@ async def run_session(project_id: str, session_id: str):
         
         cm.conversations[session_id] = conv
     
-    # Run the conversation
+    # Run the conversation - SDK stores messages natively in state.events
     try:
         cm.conversations[session_id].sdk_conversation.run()
-        
-        # Get all messages from SDK conversation and save to session
-        from local_agent_server.services.session_manager import get_session_manager
-        pm = get_project_manager()
-        sm = get_session_manager(pm)
-        session = sm.get_session(project_id, session_id)
-        
-        if session:
-            # Get messages from SDK conversation events
-            sdk_conv = cm.conversations[session_id].sdk_conversation
-            all_messages = []
-            
-            # Get messages from conversation history
-            for msg in sdk_conv.events:
-                msg_dict = {}
-                if hasattr(msg, 'role'):
-                    msg_dict['role'] = msg.role
-                if hasattr(msg, 'content'):
-                    msg_dict['content'] = str(msg.content)[:5000]
-                if hasattr(msg, 'timestamp'):
-                    msg_dict['timestamp'] = str(msg.timestamp)
-                elif hasattr(msg, 'created_at'):
-                    msg_dict['timestamp'] = str(msg.created_at)
-                
-                if msg_dict:
-                    all_messages.append(msg_dict)
-            
-            # Save to session
-            if all_messages:
-                session.save_messages(all_messages)
-                logger.info(f"Saved {len(all_messages)} messages to session {session_id}")
-        
         return {
             "status": "started",
             "session_id": session_id,
