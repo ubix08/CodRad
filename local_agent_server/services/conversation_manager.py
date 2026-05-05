@@ -192,11 +192,20 @@ class ConversationManager:
                 pass  # May fail if event loop not running
     
     async def run_conversation(self, conversation_id: str) -> None:
-        """Run a conversation (process messages)."""
+        """Run a conversation (process messages).
+        
+        Uses thread pool to avoid blocking the async event loop.
+        """
+        import asyncio
+        import concurrent.futures
+        
         conv = self.get_conversation(conversation_id)
         if conv:
             try:
-                conv.sdk_conversation.run()
+                # Run in thread pool to avoid blocking event loop
+                loop = asyncio.get_event_loop()
+                executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                await loop.run_in_executor(executor, conv.sdk_conversation.run)
                 conv.status = ConversationStatus.STOPPED
             except Exception as e:
                 conv.status = ConversationStatus.ERROR

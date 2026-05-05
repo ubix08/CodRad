@@ -172,13 +172,14 @@ function App() {
     }
   }
   
-  // Start polling for messages
+  // Start polling for messages (uses SSE internally - no separate polling needed)
   const startPolling = (sessionId) => {
-    // Also connect to SSE for real-time updates
+    // Connect to SSE for real-time updates
     connectSSE(sessionId)
     
+    // Polling is only used as fallback if SSE fails
     let count = 0
-    const maxCount = 60
+    const maxCount = 30
     const interval = 1000
     
     if (pollTimerRef.current) {

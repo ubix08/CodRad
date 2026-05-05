@@ -98,8 +98,8 @@ async def generate_events(session_id: str) -> AsyncGenerator[str, None]:
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
             break
         
-        # Small delay between checks
-        await asyncio.sleep(0.5)
+        # Small delay between checks (1 second - less aggressive)
+        await asyncio.sleep(1.0)
     
     yield f"event: done\ndata: {json.dumps({'iterations': iteration})}\n\n"
 
@@ -175,7 +175,7 @@ async def sse_stream(session_id: str):
                 yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
                 break
             
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(1.0)  # 1 second interval - less aggressive polling
         
         yield f"event: done\ndata: {json.dumps({'session_id': session_id})}\n\n"
     
