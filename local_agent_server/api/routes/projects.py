@@ -2,12 +2,14 @@
 Project management API routes.
 """
 
+import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from local_agent_server.services.project_manager import get_project_manager, Project
 from local_agent_server.services.session_manager import get_session_manager
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
@@ -240,12 +242,45 @@ async def run_session(project_id: str, session_id: str):
     # Run the conversation
     try:
         cm.conversations[session_id].sdk_conversation.run()
+        
+        # Get all messages from SDK conversation and save to session
+        from local_agent_server.services.session_manager import get_session_manager
+        pm = get_project_manager()
+        sm = get_session_manager(pm)
+        session = sm.get_session(project_id, session_id)
+        
+        if session:
+            # Get messages from SDK conversation events
+            sdk_conv = cm.conversations[session_id].sdk_conversation
+            all_messages = []
+            
+            # Get messages from conversation history
+            for msg in sdk_conv.events:
+                msg_dict = {}
+                if hasattr(msg, 'role'):
+                    msg_dict['role'] = msg.role
+                if hasattr(msg, 'content'):
+                    msg_dict['content'] = str(msg.content)[:5000]
+                if hasattr(msg, 'timestamp'):
+                    msg_dict['timestamp'] = str(msg.timestamp)
+                elif hasattr(msg, 'created_at'):
+                    msg_dict['timestamp'] = str(msg.created_at)
+                
+                if msg_dict:
+                    all_messages.append(msg_dict)
+            
+            # Save to session
+            if all_messages:
+                session.save_messages(all_messages)
+                logger.info(f"Saved {len(all_messages)} messages to session {session_id}")
+        
         return {
             "status": "started",
             "session_id": session_id,
             "project_id": project_id,
         }
     except Exception as e:
+        logger.error(f"Run session error: {e}")
         return JSONResponse(
             status_code=500,
             content={"error": str(e)}
