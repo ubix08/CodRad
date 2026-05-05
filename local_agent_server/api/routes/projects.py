@@ -146,26 +146,28 @@ async def get_session(project_id: str, session_id: str):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    # Get messages from session file
+    # Get messages from session file (primary)
     messages = session.get_messages()
     
-    # If no messages, try to get from conversation manager (SDK native)
+    # If no messages from file, try SDK state.events (fallback)
     if not messages:
         from local_agent_server.services.conversation_manager import get_conversation_manager
         cm = get_conversation_manager()
         conv = cm.get_conversation(session_id)
-        if conv and conv.sdk_conversation:
-            messages = []
-            for event in conv.sdk_conversation.state.events:
-                msg_data = {}
-                if hasattr(event, 'role'):
-                    msg_data['role'] = event.role
-                if hasattr(event, 'content'):
-                    msg_data['content'] = str(event.content)[:5000]
-                if hasattr(event, 'timestamp'):
-                    msg_data['timestamp'] = str(event.timestamp)
-                if msg_data:
-                    messages.append(msg_data)
+        if conv and conv.sdk_conversation and hasattr(conv.sdk_conversation.state, 'events'):
+            try:
+                # SDK stores events in state.events
+                events = conv.sdk_conversation.state.events
+                messages = []
+                for event in events:
+                    # Events have content, convert to dict
+                    if hasattr(event, 'content'):
+                        messages.append({
+                            'role': getattr(event, 'sender', 'user'),
+                            'content': str(event.content)[:5000],
+                        })
+            except Exception:
+                pass
     
     return {
         "session_id": session.session_id,
@@ -261,7 +263,7 @@ async def run_session(project_id: str, session_id: str):
         
         # Add initial message if exists
         if initial_message:
-            sdk_conversation.send_message(role="user", content=initial_message)
+            sdk_conversation.send_message(message=initial_message)
         
         # Create conversation in manager
         from local_agent_server.services.conversation_manager import Conversation as Conv
@@ -314,7 +316,7 @@ async def send_message(project_id: str, session_id: str, request: SendMessageReq
     
     if conv and conv.sdk_conversation:
         # SDK-native way: send message to conversation
-        conv.sdk_conversation.send_message(role="user", content=request.message)
+        conv.sdk_conversation.send_message(message=request.message)
     
     return {
         "status": "message_added",
