@@ -200,22 +200,30 @@ async def get_session(project_id: str, session_id: str):
         events = list(sdk_conv.state.events) if hasattr(sdk_conv.state, 'events') else []
         
         for event in events:
-            content = None
-            if hasattr(event, 'content'):
-                content = str(event.content)[:5000]
-            elif hasattr(event, 'message'):
-                content = str(event.message)[:5000]
+            # Only look for Message events with content
+            event_type = type(event).__name__
             
-            if not content:
+            # Skip non-message events
+            if event_type not in ('Message', 'UserMessage', 'AssistantMessage'):
                 continue
             
-            role = 'assistant'
-            if hasattr(event, 'sender'):
-                role = 'user' if event.sender == 'user' else 'assistant'
-            elif hasattr(event, 'role'):
-                role = event.role
+            # Get content from message
+            content = getattr(event, 'content', None)
+            if not content:
+                continue
+            content = str(content)[:5000]
             
-            messages.append({'role': role, 'content': content})
+            # Skip system prompts/tools
+            if 'Tools Available:' in content or 'Message from User' in content:
+                continue
+            
+            # Determine role from event class
+            role = 'assistant'
+            if 'User' in event_type:
+                role = 'user'
+            
+            if content and len(content) > 10:
+                messages.append({'role': role, 'content': content})
     except Exception as e:
         logger.error(f"Error getting messages: {e}")
     
