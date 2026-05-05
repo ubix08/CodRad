@@ -18,6 +18,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
+# Load .env file if exists
+from dotenv import load_dotenv
+load_dotenv()  # Load environment variables from .env
+
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
