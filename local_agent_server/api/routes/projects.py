@@ -383,3 +383,56 @@ async def send_message(project_id: str, session_id: str, request: SendMessageReq
         "status": "message_added",
         "session_id": session_id,
     }
+
+
+# Get messages from session (for frontend polling)
+@router.get("/{project_id}/sessions/{session_id}/messages")
+async def get_messages(project_id: str, session_id: str):
+    """Get messages from session for polling."""
+    from local_agent_server.services.conversation_manager import get_conversation_manager
+    cm = get_conversation_manager()
+    conv = cm.get_conversation(session_id)
+    
+    if not conv or not conv.sdk_conversation:
+        return {"messages": []}
+    
+    # Extract messages (same logic as get_session but only messages)
+    messages = []
+    try:
+        events = list(conv.sdk_conversation.state.events) if hasattr(conv.sdk_conversation.state, 'events') else []
+        
+        for event in events:
+            event_type = type(event).__name__
+            
+            if event_type in ('SystemPromptEvent',):
+                continue
+            
+            if event_type == 'MessageEvent':
+                source = getattr(event, 'source', None)
+                llm_msg = getattr(event, 'llm_message', None)
+                
+                if llm_msg:
+                    if hasattr(llm_msg, 'content'):
+                        content_parts = []
+                        for part in getattr(llm_msg, 'content', []):
+                            if hasattr(part, 'text'):
+                                content_parts.append(part.text)
+                            else:
+                                content_parts.append(str(part))
+                        content = '\n'.join(content_parts) if content_parts else str(llm_msg)
+                    else:
+                        content = str(llm_msg)
+                else:
+                    content = None
+                
+                role = source if source else 'user'
+                if role == 'agent':
+                    role = 'assistant'
+                
+                if content and len(content) > 10:
+                    messages.append({'role': role, 'content': content[:5000]})
+    except Exception as e:
+        logger.error(f"Error getting messages: {e}")
+    
+    return {"messages": messages}
+
