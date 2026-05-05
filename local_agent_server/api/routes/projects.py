@@ -171,32 +171,42 @@ async def delete_session(project_id: str, session_id: str):
 async def run_session(project_id: str, session_id: str):
     """Run a session (start the agent)."""
     from local_agent_server.services.conversation_manager import get_conversation_manager
-    from local_agent_server.services.project_manager import get_project_manager
     from fastapi.responses import JSONResponse
     
     cm = get_conversation_manager()
-    pm = get_project_manager()
     
     if not cm.api_key:
-        return JSONResponse(status_code=500, content={"error": "No API key configured"})
+        return JSONResponse(
+            status_code=500,
+            content={"error": "No API key configured"}
+        )
     
-    project = pm.get_project(project_id)
-    if not project.exists:
-        return JSONResponse(status_code=404, content={"error": "Project not found"})
-    
-    # Get or create conversation
+    # Create or get conversation for this session
+    # Use session_id as conversation_id
     existing_conv = cm.get_conversation(session_id)
-    sdk_conv = None
-    workspace = None
     
-    if existing_conv:
-        sdk_conv = existing_conv.sdk_conversation
-    else:
-        # Create new
-        workspace = pm.get_workspace_for_project(project_id)
-        if not workspace:
-            return JSONResponse(status_code=404, content={"error": "Workspace not found"})
+    if not existing_conv:
+        # Get project workspace
+        from local_agent_server.services.project_manager import get_project_manager
+        pm = get_project_manager()
+        project = pm.get_project(project_id)
         
+        if not project.exists:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Project not found"}
+            )
+        
+        # Get workspace for project
+        workspace = pm.get_workspace_for_project(project_id)
+        
+        if not workspace:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Project workspace not found"}
+            )
+        
+        # Create agent and conversation
         from openhands.sdk import Conversation as SDKConversation
         from local_agent_server.services.agent_factory import get_agent_factory
         
@@ -204,32 +214,42 @@ async def run_session(project_id: str, session_id: str):
         agent = factory.create_agent(
             api_key=cm.api_key,
             agent_type=cm.default_agent_type,
-            enable_browser=False,
+            enable_browser=cm.enable_browser,
             model=cm.model,
         )
         
-        sdk_conv = SDKConversation(agent=agent, workspace=workspace)
+        # Create SDK conversation
+        sdk_conversation = SDKConversation(
+            agent=agent,
+            workspace=workspace,
+        )
         
+        # Create conversation in manager
         from local_agent_server.services.conversation_manager import Conversation as Conv
         conv = Conv(
             id=session_id,
             workspace_dir=str(workspace.working_dir),
             agent_type=cm.default_agent_type,
-            enable_browser=False,
+            enable_browser=cm.enable_browser,
             agent=agent,
-            sdk_conversation=sdk_conv,
+            sdk_conversation=sdk_conversation,
         )
+        
         cm.conversations[session_id] = conv
     
-    if not sdk_conv:
-        return JSONResponse(status_code=500, content={"error": "Failed to get conversation"})
-    
-    # Run
+    # Run the conversation
     try:
-        sdk_conv.run()
-        return JSONResponse(content={"status": "started", "session_id": session_id, "project_id": project_id})
+        cm.conversations[session_id].sdk_conversation.run()
+        return {
+            "status": "started",
+            "session_id": session_id,
+            "project_id": project_id,
+        }
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e)}
+        )
 
 
 # Send message to session
