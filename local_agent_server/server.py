@@ -2,7 +2,7 @@
 Local Agent Server - Main Application Entry Point
 
 A personal AI coding assistant built on OpenHands SDK without sandboxing.
-Provides REST API, WebSocket (Socket.IO), and Admin endpoints.
+Provides REST API only (SDK-native pattern).
 
 Usage:
     python -m local_agent_server.server
@@ -217,90 +217,29 @@ try:
 except ImportError:
     logger.warning("GitHub integration: not available")
 
-# Include project routes
+# Include project routes (SDK-native REST only)
 try:
     from local_agent_server.api.routes.projects import router as projects_router
     app.include_router(projects_router, tags=["projects"])
-    logger.info("Projects: enabled")
+    logger.info("Projects: enabled (SDK-native REST)")
 except Exception as e:
     logger.warning(f"Projects: not available - {e}")
 
-try:
-    app.include_router(sse_router, tags=["sse"])
-    logger.info("SSE: enabled")
-except Exception as e:
-    logger.warning(f"SSE: not available - {e}")
+# NOTE: SSE is REMOVED - not SDK-native pattern
+# Use REST polling via /messages endpoint instead
 
 
-# Socket.IO server for SDK-compatible WebSocket protocol
-class SocketIOMiddleware(BaseHTTPMiddleware):
-    """Middleware to handle Socket.IO connections."""
-    
-    async def dispatch(self, request, call_next):
-        # Let Socket.IO handle its own paths
-        if request.url.path.startswith('/socket.io'):
-            # Socket.IO will be mounted separately
-            return await call_next(request)
-        return await call_next(request)
-
-
-# Add Socket.IO to the app
-try:
-    from local_agent_server.socketio_server import sio
-    from local_agent_server.socketio_server import setup_socketio_events
-    
-    # Initialize Socket.IO
-    setup_socketio_events()
-    
-    # Attach to ASGI app
-    asgi_app = sio.asgi_app()
-    app.mount("/socket.io", asgi_app)
-    
-    logger.info("Socket.IO: enabled (SDK protocol)")
-except ImportError as e:
-    logger.warning(f"Socket.IO: not available - {e}")
-
-
-# WebSocket endpoint for real-time events
-@app.websocket("/ws/{conversation_id}")
-async def websocket_events(websocket: WebSocket, conversation_id: str):
-    """WebSocket endpoint for real-time conversation events."""
-    await event_manager.connect(conversation_id, websocket)
-    try:
-        while True:
-            # Wait for messages from client
-            data = await websocket.receive_text()
-            # Handle client messages if needed
-    except WebSocketDisconnect:
-        event_manager.disconnect(conversation_id, websocket)
-
-
-# WebSocket chat endpoint
-@app.websocket("/ws/chat/{conversation_id}")
-async def websocket_chat(websocket: WebSocket, conversation_id: str):
-    """WebSocket endpoint for chat with the agent."""
-    await websocket.accept()
-    
-    cm = get_conversation_manager()
-    if not cm:
-        await websocket.send_json({"error": "Conversation manager not initialized"})
-        await websocket.close()
-        return
-    
-    try:
-        # Send initial state
-        await websocket.send_json({
-            "type": "connected",
-            "conversation_id": conversation_id,
-        })
-        
-        # Handle messages
-        while True:
-            data = await websocket.receive_text()
-            # Process message...
-            await websocket.send_json({"type": "ack"})
-    except WebSocketDisconnect:
-        pass
+# ============================================================================
+# SDK-NATIVE COMMUNICATION: REST API Only
+# ============================================================================
+# The server uses ONLY SDK-native REST endpoints:
+# - POST /api/projects/{id}/sessions/{sid}/messages - send message and run agent
+# - GET /api/projects/{id}/sessions/{sid}/messages - poll for messages
+# - POST /api/projects/{id}/sessions/{sid}/run - run session
+#
+# WebSocket, Socket.IO, and SSE are REMOVED - not SDK-native patterns.
+# The SDK provides LocalConversation which works via direct method calls.
+# ============================================================================
 
 
 # Exception handlers

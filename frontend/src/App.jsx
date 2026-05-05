@@ -31,7 +31,7 @@ function App() {
   useEffect(() => {
     return () => {
       stopPolling()
-      disconnectSSE()
+      // NOTE: No SSE/WebSocket to disconnect - using REST only
     }
   }, [])
 
@@ -172,15 +172,13 @@ function App() {
     }
   }
   
-  // Start polling for messages (uses SSE internally - no separate polling needed)
+  // Start polling for messages (REST only - SDK-native pattern)
   const startPolling = (sessionId) => {
-    // Connect to SSE for real-time updates
-    connectSSE(sessionId)
-    
-    // Polling is only used as fallback if SSE fails
+    // REST polling - no SSE, no WebSocket, no Socket.IO
+    // This is the SDK-native polling pattern
     let count = 0
-    const maxCount = 30
-    const interval = 1000
+    const maxCount = 60  // 60 seconds max
+    const interval = 1500  // 1.5 second polling interval
     
     if (pollTimerRef.current) {
       clearInterval(pollTimerRef.current)
@@ -190,21 +188,22 @@ function App() {
       count++
       
       try {
-        // Use dedicated /messages endpoint for polling
+        // Use REST endpoint for polling (SDK-native)
         const res = await fetch(
           `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}/messages`
         )
         const data = await res.json()
         const newMsgs = data.messages || []
         
-        // Always update messages from backend (don't compare length)
+        // Always update messages
         if (newMsgs.length > 0) {
           setMessages(newMsgs)
         }
         
-        // Check if agent responded (has assistant message)
+        // Check if agent completed (has assistant message)
         const hasAssistant = newMsgs.some(m => m.role === 'assistant')
         
+        // Stop after response or timeout
         if (hasAssistant || count >= maxCount) {
           stopPolling()
         }
@@ -223,68 +222,7 @@ function App() {
     setIsLoading(false)
   }
   
-  // Connect to SSE for real-time updates
-  const connectSSE = (sessionId) => {
-    // Close existing connection
-    if (wsRef.current) {
-      wsRef.current.close()
-    }
-    
-    // Determine the actual session ID
-    const actualSessionId = sessionId || currentSession?.id || currentSession?.session_id
-    if (!actualSessionId) return
-    
-    const eventSource = new EventSource(`/sse/${actualSessionId}`)
-    
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        console.log('SSE message:', data)
-        
-        // Handle different event types
-        if (data.role === 'assistant' || data.role === 'user') {
-          // It's a message - reload from backend
-          loadSessionMessages(actualSessionId)
-        }
-      } catch (e) {
-        console.error('SSE parse error:', e)
-      }
-    }
-    
-    eventSource.addEventListener('message', (e) => {
-      const data = JSON.parse(e.data)
-      console.log('Message event:', data)
-      // Reload messages when we get a message event
-      loadSessionMessages(actualSessionId)
-    })
-    
-    eventSource.addEventListener('action', (e) => {
-      const data = JSON.parse(e.data)
-      console.log('Action event:', data)
-    })
-    
-    eventSource.addEventListener('completed', (e) => {
-      console.log('Agent completed')
-      loadSessionMessages(actualSessionId)
-      stopPolling()
-    })
-    
-    eventSource.onerror = (e) => {
-      console.log('SSE error:', e)
-      eventSource.close()
-    }
-    
-    // Store for cleanup
-    wsRef.current = eventSource
-  }
-  
-  // Disconnect SSE
-  const disconnectSSE = () => {
-    if (wsRef.current) {
-      wsRef.current.close()
-      wsRef.current = null
-    }
-  }
+  // NOTE: SSE and WebSocket are REMOVED - SDK uses REST polling only
 
   const goBackToProjects = () => {
     stopPolling()
@@ -298,7 +236,7 @@ function App() {
 
   const goBackToSessions = () => {
     stopPolling()
-    disconnectSSE()
+    // No SSE/WebSocket to disconnect - using REST only
     setCurrentSession(null)
     setMessages([])
     setShowSessions(true)

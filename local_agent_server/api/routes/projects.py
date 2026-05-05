@@ -421,10 +421,35 @@ async def get_messages(project_id: str, session_id: str):
     if not conv or not conv.sdk_conversation:
         return {"messages": []}
     
-    # Extract messages (same logic as get_session but only messages)
+    # Extract messages from SDK conversation state
+    # NOTE: SDK 1.19+ uses different event access - try multiple patterns
     messages = []
     try:
-        events = list(conv.sdk_conversation.state.events) if hasattr(conv.sdk_conversation.state, 'events') else []
+        # Try several SDK event patterns (SDK version may vary)
+        state = conv.sdk_conversation.state
+        
+        # Pattern 1: state.events (older SDK)
+        events = list(state.events) if hasattr(state, 'events') else []
+        
+        # Pattern 2: state.history (some SDK versions)
+        if not events and hasattr(state, 'history'):
+            events = list(state.history)
+        
+        # Pattern 3: state.messages (some SDK versions)
+        if not events and hasattr(state, 'messages'):
+            events = list(state.messages)
+        
+        # Pattern 4: state.iterations (SDK 1.19+)
+        if not events and hasattr(state, 'iterations'):
+            events = list(state.iterations)
+        
+        # Pattern 5: Get via conversation method (if available)
+        if not events and hasattr(conv.sdk_conversation, 'get_events'):
+            events = conv.sdk_conversation.get_events()
+        
+        if not events:
+            logger.warning(f"No events found in SDK conversation state for {session_id}")
+            return {"messages": []}
         
         for event in events:
             event_type = type(event).__name__
