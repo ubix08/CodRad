@@ -171,6 +171,7 @@ async def delete_session(project_id: str, session_id: str):
 async def run_session(project_id: str, session_id: str):
     """Run a session (start the agent)."""
     from local_agent_server.services.conversation_manager import get_conversation_manager
+    from local_agent_server.services.project_manager import get_project_manager
     from fastapi.responses import JSONResponse
     
     cm = get_conversation_manager()
@@ -181,22 +182,21 @@ async def run_session(project_id: str, session_id: str):
             content={"error": "No API key configured"}
         )
     
-    # Create or get conversation for this session
-    # Use session_id as conversation_id
+    # Get project manager - needed for both paths
+    pm = get_project_manager()
+    project = pm.get_project(project_id)
+    
+    if not project.exists:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Project not found"}
+        )
+    
+    # Get or create conversation
     existing_conv = cm.get_conversation(session_id)
+    sdk_conversation = None
     
     if not existing_conv:
-        # Get project workspace
-        from local_agent_server.services.project_manager import get_project_manager
-        pm = get_project_manager()
-        project = pm.get_project(project_id)
-        
-        if not project.exists:
-            return JSONResponse(
-                status_code=404,
-                content={"error": "Project not found"}
-            )
-        
         # Get workspace for project
         workspace = pm.get_workspace_for_project(project_id)
         
@@ -214,11 +214,10 @@ async def run_session(project_id: str, session_id: str):
         agent = factory.create_agent(
             api_key=cm.api_key,
             agent_type=cm.default_agent_type,
-            enable_browser=False,  # Disable browser by default
+            enable_browser=False,
             model=cm.model,
         )
         
-        # Create SDK conversation
         sdk_conversation = SDKConversation(
             agent=agent,
             workspace=workspace,
@@ -236,6 +235,11 @@ async def run_session(project_id: str, session_id: str):
         )
         
         cm.conversations[session_id] = conv
+        existing_conv = conv
+    
+    # Get sdk_conversation from existing conv if needed
+    if sdk_conversation is None:
+        sdk_conversation = existing_conv.sdk_conversation
     
     # Load messages from session before running
     try:
@@ -253,11 +257,10 @@ async def run_session(project_id: str, session_id: str):
                 )
     except Exception as e:
         logger.warning(f"Could not load session messages: {e}")
-        messages = []
     
     # Run the conversation
     try:
-        cm.conversations[session_id].sdk_conversation.run()
+        sdk_conversation.run()
         return JSONResponse(content={
             "status": "started",
             "session_id": session_id,
