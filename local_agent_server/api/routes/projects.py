@@ -214,7 +214,7 @@ async def run_session(project_id: str, session_id: str):
         agent = factory.create_agent(
             api_key=cm.api_key,
             agent_type=cm.default_agent_type,
-            enable_browser=cm.enable_browser,
+            enable_browser=False,  # Disable browser by default
             model=cm.model,
         )
         
