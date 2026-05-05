@@ -149,18 +149,40 @@ async def get_session(project_id: str, session_id: str):
     
     # Get messages from SDK state.events
     messages = []
-    for event in conv.sdk_conversation.state.events:
-        if hasattr(event, 'content'):
-            # Determine role: use role if present, otherwise from sender
-            role = getattr(event, 'role', None)
-            if not role:
-                sender = getattr(event, 'sender', 'assistant')
-                role = 'user' if sender == 'user' else 'assistant'
+    try:
+        events = conv.sdk_conversation.state.events
+        logger.info(f"Session {session_id} has {len(events)} events")
+        
+        for event in events:
+            # Log event type for debugging
+            event_type = type(event).__name__
             
-            messages.append({
-                'role': role,
-                'content': str(event.content)[:5000],
-            })
+            # Different event types have different attributes
+            if hasattr(event, 'content'):
+                content = str(event.content)[:5000]
+            elif hasattr(event, 'message'):
+                content = str(event.message)[:5000]
+            elif hasattr(event, 'action'):
+                content = f"Action: {event.action}"
+            else:
+                content = f"[{event_type}]"
+            
+            # Determine role
+            if hasattr(event, 'role'):
+                role = event.role
+            elif hasattr(event, 'sender'):
+                sender = event.sender
+                role = 'user' if sender == 'user' else 'assistant'
+            else:
+                role = 'assistant'
+            
+            if content and content != f"[{event_type}]":
+                messages.append({
+                    'role': role,
+                    'content': content,
+                })
+    except Exception as e:
+        logger.error(f"Error getting messages: {e}")
     
     return {
         "session_id": session_id,
