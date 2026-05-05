@@ -28,8 +28,39 @@ class LLMProvider(str, Enum):
 
 # LLM configuration - Support multiple providers
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic").lower()
-DEFAULT_MODEL = os.getenv("LLM_MODEL", "claude-sonnet-4-5-20250929")
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "")  # Provider-specific endpoints
+
+# Get from environment - support custom config
+_env_model = os.getenv("LLM_MODEL")
+_env_base_url = os.getenv("LLM_BASE_URL", "")
+
+# If LLM_BASE_URL is set, use custom provider
+if _env_base_url:
+    # Custom endpoint - use openai-compatible format
+    DEFAULT_MODEL = _env_model or "gpt-4o"
+    LLM_BASE_URL = _env_base_url
+else:
+    # Use built-in provider configs
+    if LLM_PROVIDER == "nvidia":
+        DEFAULT_MODEL = _env_model or "nvidia/llama-3.3-nemotron-70b-instruct"
+    elif LLM_PROVIDER == "anthropic":
+        DEFAULT_MODEL = _env_model or "claude-sonnet-4-5-20250929"
+    elif LLM_PROVIDER == "google":
+        DEFAULT_MODEL = _env_model or "gemini-2.0-flash-exp"
+    elif LLM_PROVIDER == "groq":
+        DEFAULT_MODEL = _env_model or "llama-3.3-70b-versatile"
+    elif LLM_PROVIDER == "cerebras":
+        DEFAULT_MODEL = _env_model or "llama-3.3-70b"
+    elif LLM_PROVIDER == "openrouter":
+        DEFAULT_MODEL = _env_model or "openrouter/google/gemini-2.0-flash-001"
+    elif LLM_PROVIDER == "openai":
+        DEFAULT_MODEL = _env_model or "gpt-4o"
+    else:
+        DEFAULT_MODEL = _env_model or "claude-sonnet-4-5-20250929"
+    
+    _provider_config = LLM_PROVIDER_CONFIGS.get(LLM_PROVIDER, {})
+    LLM_BASE_URL = _provider_config.get("base_url", "")
+
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", LLM_BASE_URL)  # Allow override
 
 # LLM configuration parameters
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.0"))

@@ -154,6 +154,7 @@ async def create_session(project_id: str, request: CreateSessionRequest):
             agent_type=cm.default_agent_type,
             enable_browser=cm.enable_browser,
             model=cm.model,
+            base_url=cm.base_url,
         )
         
         # Create SDK conversation NOW
@@ -339,6 +340,7 @@ async def run_session(project_id: str, session_id: str):
             agent_type=cm.default_agent_type,
             enable_browser=cm.enable_browser,
             model=cm.model,
+            base_url=cm.base_url,
         )
         
         # Create SDK conversation
@@ -414,6 +416,7 @@ async def send_message(project_id: str, session_id: str, request: SendMessageReq
             agent_type=cm.default_agent_type,
             enable_browser=cm.enable_browser,
             model=cm.model,
+            base_url=cm.base_url,
         )
         
         sdk_conversation = SDKConversation(

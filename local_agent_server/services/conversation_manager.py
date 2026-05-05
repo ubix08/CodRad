@@ -105,15 +105,13 @@ class ConversationManager:
                     break
         
         # Load config from environment using new module
-        from local_agent_server.core.config import get_provider_default_model
-        self.model = os.getenv("LLM_MODEL") or get_provider_default_model()
+        from local_agent_server.core.config import DEFAULT_MODEL, LLM_BASE_URL
+        self.model = os.getenv("LLM_MODEL") or DEFAULT_MODEL
+        self.base_url = os.getenv("LLM_BASE_URL") or LLM_BASE_URL
         self.enable_browser = os.getenv("ENABLE_BROWSER", "true").lower() == "true"
         self.default_agent_type = AgentType.DEFAULT
         
-        if not self.api_key:
-            logger.warning("No API key configured!")
-        
-        logger.info(f"ConversationManager initialized (api_key_configured={bool(self.api_key)}, model={self.model})")
+        logger.info(f"ConversationManager initialized (api_key_configured={bool(self.api_key)}, model={self.model}, base_url={self.base_url})")
     
     def set_api_key(self, api_key: str) -> None:
         """Set the API key."""

@@ -80,20 +80,20 @@ class AgentFactory:
         top_p: Optional[float] = None,
     ) -> LLM:
         """Create an LLM instance with full configuration."""
-        # For OpenRouter, litellm handles routing automatically - don't pass base_url
-        effective_model = model or self.default_model
+        # Get from config - supports custom providers
+        from local_agent_server.core.config import DEFAULT_MODEL as config_model, LLM_BASE_URL as config_base_url
         
-        # Get base_url from parameter or environment
-        final_base_url = base_url or os.getenv("LLM_BASE_URL", "") or os.getenv("OPENAI_BASE_URL", "")
+        effective_model = model or config_model
+        final_base_url = base_url or config_base_url
         
-        # For special providers that need explicit provider format
+        # For NVIDIA custom endpoints, add provider prefix only if using nvidia/ base URL
         if final_base_url and "nvidia" in final_base_url.lower():
-            # Add provider prefix to model name
-            if effective_model and "/" not in effective_model:
+            if effective_model and "/" not in effective_model and not effective_model.startswith("nvidia_"):
                 effective_model = f"nvidia_nim/{effective_model}"
         
+        # For OpenRouter, litellm handles routing automatically
         if effective_model and effective_model.startswith("openrouter/"):
-            final_base_url = ""  # Empty allows litellm to route automatically
+            final_base_url = ""
         
         return LLM(
             usage_id="local-agent",
