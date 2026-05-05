@@ -64,6 +64,22 @@ manager = ConnectionManager()
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     """WebSocket endpoint for real-time session events."""
     await manager.connect(session_id, websocket)
+    
+    # Register event callback for this session
+    from local_agent_server.services.conversation_manager import register_event_callback
+    
+    async def event_handler(conv_id: str, event_type: str, event_data: dict):
+        """Handler that sends events to WebSocket."""
+        try:
+            await websocket.send_json({
+                "type": event_type,
+                "data": event_data
+            })
+        except Exception:
+            pass  # Connection may be closed
+    
+    register_event_callback(session_id, event_handler)
+    
     try:
         while True:
             # Keep connection alive, handle incoming messages
@@ -77,6 +93,10 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                 pass
     except WebSocketDisconnect:
         manager.disconnect(session_id, websocket)
+    finally:
+        # Unregister callback on disconnect
+        from local_agent_server.services.conversation_manager import unregister_event_callback
+        unregister_event_callback(session_id)
 
 
 # Function to emit events from anywhere in the app

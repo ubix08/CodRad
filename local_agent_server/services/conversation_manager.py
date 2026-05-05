@@ -2,9 +2,11 @@
 
 import os
 import uuid
+import json
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Callable, Dict
 
 import logging
 
@@ -16,6 +18,30 @@ from .agent_factory import get_agent_factory
 from .project_manager import get_project_manager
 
 logger = logging.getLogger(__name__)
+
+
+# Event callback type for real-time updates
+EventCallback = Callable[[str, str, dict], None]  # (conversation_id, event_type, event_data)
+_event_callbacks: Dict[str, EventCallback] = {}
+
+
+def register_event_callback(conversation_id: str, callback: EventCallback) -> None:
+    """Register a callback for conversation events."""
+    _event_callbacks[conversation_id] = callback
+
+
+def unregister_event_callback(conversation_id: str) -> None:
+    """Unregister a callback for conversation events."""
+    _event_callbacks.pop(conversation_id, None)
+
+
+def emit_event(conversation_id: str, event_type: str, event_data: dict) -> None:
+    """Emit an event to registered callbacks."""
+    if conversation_id in _event_callbacks:
+        try:
+            _event_callbacks[conversation_id](conversation_id, event_type, event_data)
+        except Exception as e:
+            logger.error(f"Error emitting event: {e}")
 
 
 @dataclass
@@ -179,22 +205,18 @@ class ConversationManager:
         if conv:
             conv.sdk_conversation.send_message(message)
             conv.status = ConversationStatus.RUNNING
+            
             # Emit user message event for WebSocket clients
-            import asyncio
-            from local_agent_server.core.events import emit_agent_started, EventType
-            try:
-                from local_agent_server.core.events import event_manager
-                asyncio.create_task(event_manager.emit(conversation_id, EventType.CONVERSATION_MESSAGE, {
-                    "role": role.value,
-                    "content": message[:500]
-                }))
-            except Exception:
-                pass  # May fail if event loop not running
+            emit_event(conversation_id, "message", {
+                "role": role.value,
+                "content": message[:500]
+            })
     
     async def run_conversation(self, conversation_id: str) -> None:
         """Run a conversation (process messages).
         
         Uses thread pool to avoid blocking the async event loop.
+        Emits events for real-time updates (SDK-compatible).
         """
         import asyncio
         import concurrent.futures
@@ -202,14 +224,26 @@ class ConversationManager:
         conv = self.get_conversation(conversation_id)
         if conv:
             try:
+                # Emit start event
+                emit_event(conversation_id, "agent_start", {"conversation_id": conversation_id})
+                
                 # Run in thread pool to avoid blocking event loop
                 loop = asyncio.get_event_loop()
                 executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
                 await loop.run_in_executor(executor, conv.sdk_conversation.run)
+                
                 conv.status = ConversationStatus.STOPPED
+                
+                # Emit completion event
+                emit_event(conversation_id, "agent_finish", {
+                    "conversation_id": conversation_id,
+                    "status": conv.status.value
+                })
             except Exception as e:
                 conv.status = ConversationStatus.ERROR
                 logger.error(f"Error running conversation {conversation_id}: {e}")
+                # Emit error event
+                emit_event(conversation_id, "error", {"error": str(e)})
     
     def delete_conversation(self, conversation_id: str) -> None:
         """Delete a conversation.
