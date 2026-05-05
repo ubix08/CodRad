@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import Header from './components/Header'
 import MessageList from './components/MessageList'
 import ChatInput from './components/ChatInput'
@@ -10,40 +10,24 @@ import SessionList from './components/SessionList'
 const API_BASE = '/api'
 
 function App() {
-  // State
   const [currentProject, setCurrentProject] = useState(null)
   const [projects, setProjects] = useState([])
   const [currentSession, setCurrentSession] = useState(null)
   const [sessions, setSessions] = useState([])
   const [messages, setMessages] = useState([])
   const [isLoading, setIsLoading] = useState(false)
-  const [connected, setConnected] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [showProjects, setShowProjects] = useState(true)
   const [showSessions, setShowSessions] = useState(false)
-  const wsRef = useRef(null)
+  const [pollTimer, setPollTimer] = useState(null)
 
   // Load projects on mount
   useEffect(() => {
     loadProjects()
-  }, [])
-
-  // Cleanup on unmount
-  useEffect(() => {
     return () => {
-      if (wsRef.current) {
-        wsRef.current.close()
-      }
+      if (pollTimer) clearInterval(pollTimer)
     }
   }, [])
-
-  // Connect WebSocket when session is created
-  useEffect(() => {
-    if (currentSession) {
-      const sessionId = currentSession.id || currentSession.session_id
-      connectWebSocket(sessionId)
-    }
-  }, [currentSession])
 
   // Load all projects
   const loadProjects = async () => {
@@ -78,8 +62,8 @@ function App() {
     setCurrentProject(project)
     setCurrentSession(null)
     setMessages([])
+    stopPolling()
     
-    // Load sessions for this project
     try {
       const res = await fetch(`${API_BASE}/projects/${project.id}/sessions`)
       const data = await res.json()
@@ -92,7 +76,7 @@ function App() {
     }
   }
 
-  // Create new session (conversation) in current project
+  // Create new session
   const createSession = async (initialMessage) => {
     if (!currentProject) return
 
@@ -126,10 +110,10 @@ function App() {
   }
 
   // Select existing session
-  const selectSession = (session) => {
+  const selectSession = async (session) => {
     setCurrentSession(session)
-    // Load session messages - use id or session_id
-    loadSessionMessages(session.id || session.session_id)
+    stopPolling()
+    await loadSessionMessages(session.id || session.session_id)
     setShowSessions(false)
   }
 
@@ -149,156 +133,92 @@ function App() {
     }
   }
 
-  // Connect WebSocket
-  const connectWebSocket = (sessionId) => {
-    if (wsRef.current) {
-      wsRef.current.close()
-    }
-
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(
-      `${protocol}//${window.location.host}/ws/${sessionId}`
-    )
-    
-    ws.onopen = () => {
-      setConnected(true)
-    }
-    
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        handleWebSocketMessage(data)
-      } catch (e) {
-        // Handle non-JSON messages (plain text)
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: event.data,
-          timestamp: new Date().toISOString()
-        }])
-      }
-    }
-    
-    ws.onclose = () => {
-      setConnected(false)
-    }
-    
-    ws.onerror = (err) => {
-      console.error('WebSocket error:', err)
-    }
-    
-    wsRef.current = ws
-  }
-
-  const handleWebSocketMessage = (data) => {
-    // Handle different message types
-    if (data.type === 'status') {
-      setIsLoading(data.status === 'running')
-      return
-    }
-    
-    if (data.event_type === 'agent_thought' || data.event_type === 'agent_action') {
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: data.content || data.action,
-        metadata: data,
-        timestamp: new Date().toISOString()
-      }])
-      return
-    }
-    
-    if (data.type === 'complete' || data.type === 'done') {
-      setIsLoading(false)
-      return
-    }
-    
-    if (data.type === 'error') {
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: `Error: ${data.error}`,
-        timestamp: new Date().toISOString()
-      }])
-      setIsLoading(false)
-      return
-    }
-
-    // Default: treat as assistant message
-    setMessages(prev => [...prev, {
-      role: 'assistant',
-      content: typeof data === 'string' ? data : JSON.stringify(data),
-      timestamp: new Date().toISOString()
-    }])
-  }
-
+  // Send message and run agent with polling
   const sendMessage = async (content) => {
-    // Get session ID - handle both id and session_id
     const sessionId = currentSession?.id || currentSession?.session_id
+    if (!currentSession || !currentProject || !sessionId) return
     
-    // Add user message immediately
+    // Add user message to UI immediately
     setMessages(prev => [...prev, {
       role: 'user',
       content,
       timestamp: new Date().toISOString()
     }])
-
-    // Send message
-    if (currentSession && currentProject && sessionId) {
-      // Save and run via REST API
-      try {
-        await fetch(
-          `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}/messages`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: content })
-          }
-        )
-        // Run the agent
-        await fetch(
-          `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}/run`,
-          { method: 'POST' }
-        )
-        setIsLoading(true)
-        
-        // Poll for results
-        pollMessages()
-      } catch (err) {
-        console.error('Failed to run session:', err)
-      }
+    
+    setIsLoading(true)
+    
+    try {
+      // 1. Save message to session
+      await fetch(
+        `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}/messages`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: content })
+        }
+      )
+      
+      // 2. Start the agent
+      await fetch(
+        `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}/run`,
+        { method: 'POST' }
+      )
+      
+      // 3. Poll for response
+      startPolling(sessionId)
+    } catch (err) {
+      console.error('Failed to run session:', err)
+      setIsLoading(false)
     }
   }
   
-  // Poll for messages while loading
-  const pollMessages = () => {
-    const sessionId = currentSession?.id || currentSession?.session_id
-    if (!currentProject || !sessionId) return
+  // Start polling for messages
+  const startPolling = (sessionId) => {
+    let attempts = 0
+    const maxAttempts = 30
     
-    let pollCount = 0
-    const maxPolls = 20 // Stop after 60 seconds
-    
-    const interval = setInterval(async () => {
-      pollCount++
+    const timer = setInterval(async () => {
+      attempts++
+      
       try {
         const res = await fetch(
           `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}`
         )
         const data = await res.json()
-        setMessages(data.messages || [])
+        const newMessages = data.messages || []
         
-        // Stop polling after max attempts or if we got new assistant message
-        if (pollCount >= maxPolls) {
-          clearInterval(window.messagePollingInterval)
+        // Check if there are new messages or assistant response
+        if (newMessages.length > messages.length) {
+          setMessages(newMessages)
+        }
+        
+        // Check for assistant message to know we're done
+        const hasAssistant = newMessages.some(m => m.role === 'assistant')
+        
+        if (hasAssistant || attempts >= maxAttempts) {
+          clearInterval(timer)
+          setPollTimer(null)
           setIsLoading(false)
         }
       } catch (err) {
-        console.error('Failed to poll messages:', err)
+        console.error('Polling error:', err)
       }
-    }, 3000)
+    }, 1000)
     
-    // Store interval to clear later
-    window.messagePollingInterval = interval
+    setPollTimer(timer)
+  }
+  
+  // Stop polling
+  const stopPolling = () => {
+    if (pollTimer) {
+      clearInterval(pollTimer)
+      setPollTimer(null)
+    }
+    setIsLoading(false)
   }
 
   const goBackToProjects = () => {
+    stopPolling()
     setCurrentProject(null)
     setCurrentSession(null)
     setSessions([])
@@ -308,16 +228,16 @@ function App() {
   }
 
   const goBackToSessions = () => {
+    stopPolling()
     setCurrentSession(null)
     setMessages([])
     setShowSessions(true)
   }
 
-  // Render
   return (
     <div className="app">
       <Header 
-        connected={connected}
+        connected={!isLoading}
         project={currentProject}
         session={currentSession}
         onOpenSettings={() => setShowSettings(true)}
@@ -337,7 +257,7 @@ function App() {
             <MessageList messages={messages} isLoading={isLoading} />
             <ChatInput 
               onSend={sendMessage} 
-              disabled={isLoading || !connected}
+              disabled={isLoading}
             />
           </>
         ) : (
