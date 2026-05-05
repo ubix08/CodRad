@@ -2,7 +2,7 @@
 Local Agent Server - Main Application Entry Point
 
 A personal AI coding assistant built on OpenHands SDK without sandboxing.
-Provides REST API, WebSocket, and Admin endpoints.
+Provides REST API, WebSocket (Socket.IO), and Admin endpoints.
 
 Usage:
     python -m local_agent_server.server
@@ -23,6 +23,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # Core modules
 from local_agent_server.core.config import settings, get_settings
@@ -229,6 +230,35 @@ try:
     logger.info("SSE: enabled")
 except Exception as e:
     logger.warning(f"SSE: not available - {e}")
+
+
+# Socket.IO server for SDK-compatible WebSocket protocol
+class SocketIOMiddleware(BaseHTTPMiddleware):
+    """Middleware to handle Socket.IO connections."""
+    
+    async def dispatch(self, request, call_next):
+        # Let Socket.IO handle its own paths
+        if request.url.path.startswith('/socket.io'):
+            # Socket.IO will be mounted separately
+            return await call_next(request)
+        return await call_next(request)
+
+
+# Add Socket.IO to the app
+try:
+    from local_agent_server.socketio_server import sio
+    from local_agent_server.socketio_server import setup_socketio_events
+    
+    # Initialize Socket.IO
+    setup_socketio_events()
+    
+    # Attach to ASGI app
+    asgi_app = sio.asgi_app()
+    app.mount("/socket.io", asgi_app)
+    
+    logger.info("Socket.IO: enabled (SDK protocol)")
+except ImportError as e:
+    logger.warning(f"Socket.IO: not available - {e}")
 
 
 # WebSocket endpoint for real-time events
