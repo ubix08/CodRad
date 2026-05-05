@@ -179,6 +179,17 @@ class ConversationManager:
         if conv:
             conv.sdk_conversation.send_message(message)
             conv.status = ConversationStatus.RUNNING
+            # Emit user message event for WebSocket clients
+            import asyncio
+            from local_agent_server.core.events import emit_agent_started, EventType
+            try:
+                from local_agent_server.core.events import event_manager
+                asyncio.create_task(event_manager.emit(conversation_id, EventType.CONVERSATION_MESSAGE, {
+                    "role": role.value,
+                    "content": message[:500]
+                }))
+            except Exception:
+                pass  # May fail if event loop not running
     
     async def run_conversation(self, conversation_id: str) -> None:
         """Run a conversation (process messages)."""

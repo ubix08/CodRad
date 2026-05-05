@@ -52,6 +52,7 @@ from local_agent_server.api import (
     websocket_endpoint,
     websocket_chat_endpoint,
 )
+from local_agent_server.api.routes.sse import router as sse_router
 
 # Configure logging
 logging.basicConfig(
@@ -222,6 +223,12 @@ try:
     logger.info("Projects: enabled")
 except Exception as e:
     logger.warning(f"Projects: not available - {e}")
+
+try:
+    app.include_router(sse_router, tags=["sse"])
+    logger.info("SSE: enabled")
+except Exception as e:
+    logger.warning(f"SSE: not available - {e}")
 
 
 # WebSocket endpoint for real-time events

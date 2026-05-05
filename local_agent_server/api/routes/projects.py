@@ -177,6 +177,18 @@ async def create_session(project_id: str, request: CreateSessionRequest):
             sdk_conversation=sdk_conversation,
         )
         cm.conversations[session.session_id] = conv
+        
+        # Run the agent in background
+        import threading
+        def run_agent():
+            try:
+                sdk_conversation.run()
+            except Exception as e:
+                print(f"Agent error: {e}")
+        
+        thread = threading.Thread(target=run_agent)
+        thread.daemon = True
+        thread.start()
     
     return {
         "session_id": session.session_id,
@@ -368,7 +380,7 @@ async def run_session(project_id: str, session_id: str):
 # Send message to session
 @router.post("/{project_id}/sessions/{session_id}/messages")
 async def send_message(project_id: str, session_id: str, request: SendMessageRequest):
-    """Send a message to SDK conversation."""
+    """Send a message to SDK conversation and execute."""
     from local_agent_server.services.conversation_manager import get_conversation_manager
     cm = get_conversation_manager()
     conv = cm.get_conversation(session_id)
@@ -379,8 +391,21 @@ async def send_message(project_id: str, session_id: str, request: SendMessageReq
     # Send to SDK conversation
     conv.sdk_conversation.send_message(message=request.message)
     
+    # Execute the agent
+    import threading
+    def run_agent():
+        try:
+            conv.sdk_conversation.run()
+        except Exception as e:
+            print(f"Error running agent: {e}")
+    
+    # Run in background thread so response can return immediately
+    thread = threading.Thread(target=run_agent)
+    thread.daemon = True
+    thread.start()
+    
     return {
-        "status": "message_added",
+        "status": "executing",
         "session_id": session_id,
     }
 
