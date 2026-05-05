@@ -86,6 +86,12 @@ class AgentFactory:
         # Get base_url from parameter or environment
         final_base_url = base_url or os.getenv("LLM_BASE_URL", "") or os.getenv("OPENAI_BASE_URL", "")
         
+        # For special providers that need explicit provider format
+        if final_base_url and "nvidia" in final_base_url.lower():
+            # Add provider prefix to model name
+            if effective_model and "/" not in effective_model:
+                effective_model = f"nvidia_nim/{effective_model}"
+        
         if effective_model and effective_model.startswith("openrouter/"):
             final_base_url = ""  # Empty allows litellm to route automatically
         
