@@ -382,11 +382,56 @@ async def run_session(project_id: str, session_id: str):
 async def send_message(project_id: str, session_id: str, request: SendMessageRequest):
     """Send a message to SDK conversation and execute."""
     from local_agent_server.services.conversation_manager import get_conversation_manager
+    from local_agent_server.services.project_manager import get_project_manager
+    
     cm = get_conversation_manager()
     conv = cm.get_conversation(session_id)
     
+    # If no conversation exists, create one on-demand
     if not conv or not conv.sdk_conversation:
-        raise HTTPException(status_code=404, detail="Session not found")
+        # Verify project exists
+        pm = get_project_manager()
+        project = pm.get_project(project_id)
+        if not project or not project.exists:
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        # Check for API key
+        if not cm.api_key:
+            raise HTTPException(status_code=503, detail="No API key configured - cannot run agent")
+        
+        # Get workspace
+        workspace = pm.get_workspace_for_project(project_id)
+        if not workspace:
+            raise HTTPException(status_code=500, detail="Project workspace not found")
+        
+        # Create SDK conversation on-demand
+        from openhands.sdk import Conversation as SDKConversation
+        from local_agent_server.services.agent_factory import get_agent_factory
+        
+        factory = get_agent_factory()
+        agent = factory.create_agent(
+            api_key=cm.api_key,
+            agent_type=cm.default_agent_type,
+            enable_browser=cm.enable_browser,
+            model=cm.model,
+        )
+        
+        sdk_conversation = SDKConversation(
+            agent=agent,
+            workspace=workspace,
+        )
+        
+        # Store in conversation manager
+        from local_agent_server.services.conversation_manager import Conversation as Conv
+        conv = Conv(
+            id=session_id,
+            workspace_dir=str(workspace.working_dir),
+            agent_type=cm.default_agent_type,
+            enable_browser=cm.enable_browser,
+            agent=agent,
+            sdk_conversation=sdk_conversation,
+        )
+        cm.conversations[session_id] = conv
     
     # Send to SDK conversation
     conv.sdk_conversation.send_message(message=request.message)
@@ -415,9 +460,11 @@ async def send_message(project_id: str, session_id: str, request: SendMessageReq
 async def get_messages(project_id: str, session_id: str):
     """Get messages from session for polling."""
     from local_agent_server.services.conversation_manager import get_conversation_manager
+    
     cm = get_conversation_manager()
     conv = cm.get_conversation(session_id)
     
+    # If no conversation exists, return empty - session was created but no agent ran yet
     if not conv or not conv.sdk_conversation:
         return {"messages": []}
     
