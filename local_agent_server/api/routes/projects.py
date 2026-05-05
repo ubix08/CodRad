@@ -151,8 +151,14 @@ async def get_session(project_id: str, session_id: str):
     messages = []
     for event in conv.sdk_conversation.state.events:
         if hasattr(event, 'content'):
+            # Determine role: use role if present, otherwise from sender
+            role = getattr(event, 'role', None)
+            if not role:
+                sender = getattr(event, 'sender', 'assistant')
+                role = 'user' if sender == 'user' else 'assistant'
+            
             messages.append({
-                'role': getattr(event, 'sender', 'assistant'),
+                'role': role,
                 'content': str(event.content)[:5000],
             })
     
