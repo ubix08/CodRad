@@ -117,6 +117,7 @@ async def list_sessions(project_id: str):
 @router.post("/{project_id}/sessions")
 async def create_session(project_id: str, request: CreateSessionRequest):
     """Create a new session in a project."""
+    from local_agent_server.services.conversation_manager import get_conversation_manager
     pm = get_project_manager()
     project = pm.get_project(project_id)
     
@@ -128,6 +129,45 @@ async def create_session(project_id: str, request: CreateSessionRequest):
     
     if not session:
         raise HTTPException(status_code=500, detail="Failed to create session")
+    
+    # Also create SDK conversation immediately so /messages works
+    cm = get_conversation_manager()
+    workspace = pm.get_workspace_for_project(project_id)
+    
+    # Get workspace for project
+    if workspace:
+        from openhands.sdk import Conversation as SDKConversation
+        from local_agent_server.services.agent_factory import get_agent_factory
+        
+        factory = get_agent_factory()
+        agent = factory.create_agent(
+            api_key=cm.api_key,
+            agent_type=cm.default_agent_type,
+            enable_browser=cm.enable_browser,
+            model=cm.model,
+        )
+        
+        # Create SDK conversation NOW
+        sdk_conversation = SDKConversation(
+            agent=agent,
+            workspace=workspace,
+        )
+        
+        # Send initial message if provided
+        if request.initial_message:
+            sdk_conversation.send_message(message=request.initial_message)
+        
+        # Store in conversation manager with session_id as key
+        from local_agent_server.services.conversation_manager import Conversation as Conv
+        conv = Conv(
+            id=session.session_id,
+            workspace_dir=str(workspace.working_dir),
+            agent_type=cm.default_agent_type,
+            enable_browser=cm.enable_browser,
+            agent=agent,
+            sdk_conversation=sdk_conversation,
+        )
+        cm.conversations[session.session_id] = conv
     
     return {
         "session_id": session.session_id,
