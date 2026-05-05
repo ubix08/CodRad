@@ -126,8 +126,9 @@ function App() {
     if (!currentProject || !sessionId) return
     
     try {
+      // Use dedicated /messages endpoint
       const res = await fetch(
-        `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}`
+        `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}/messages`
       )
       const data = await res.json()
       setMessages(data.messages || [])
@@ -146,13 +147,6 @@ function App() {
     }
     
     console.log('Sending message via session:', sessionId)
-    
-    // Add user message to UI immediately
-    setMessages(prev => [...prev, {
-      role: 'user',
-      content,
-      timestamp: new Date().toISOString()
-    }])
     
     setIsLoading(true)
     
@@ -178,7 +172,10 @@ function App() {
       const runData = await runRes.json()
       console.log('Run data:', runData)
       
-      // 3. Poll for response
+      // 3. Immediately load fresh messages from backend
+      await loadSessionMessages(sessionId)
+      
+      // 4. Start polling for response
       startPolling(sessionId)
     } catch (err) {
       console.error('Failed to run session:', err)
@@ -189,7 +186,7 @@ function App() {
   // Start polling for messages
   const startPolling = (sessionId) => {
     let count = 0
-    const maxCount = 30
+    const maxCount = 60
     const interval = 1000
     
     if (pollTimerRef.current) {
@@ -198,25 +195,24 @@ function App() {
     
     pollTimerRef.current = setInterval(async () => {
       count++
-      console.log('Polling:', count)
       
       try {
+        // Use dedicated /messages endpoint for polling
         const res = await fetch(
-          `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}`
+          `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}/messages`
         )
         const data = await res.json()
         const newMsgs = data.messages || []
         
-        if (newMsgs.length > messages.length) {
-          console.log('New messages:', newMsgs.length)
+        // Always update messages from backend (don't compare length)
+        if (newMsgs.length > 0) {
           setMessages(newMsgs)
         }
         
-        // Check if agent responded
+        // Check if agent responded (has assistant message)
         const hasAssistant = newMsgs.some(m => m.role === 'assistant')
         
         if (hasAssistant || count >= maxCount) {
-          console.log('Stopping polling, count:', count, 'hasAssistant:', hasAssistant)
           stopPolling()
         }
       } catch (err) {
