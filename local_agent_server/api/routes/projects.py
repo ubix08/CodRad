@@ -281,8 +281,27 @@ async def run_session(project_id: str, session_id: str):
     # Run the conversation - SDK stores messages natively in state.events
     try:
         cm.conversations[session_id].sdk_conversation.run()
+        
+        # Save messages from SDK to session file for frontend polling
+        pm = get_project_manager()
+        sm = get_session_manager(pm)
+        session = sm.get_session(project_id, session_id)
+        
+        if session:
+            sdk_conv = cm.conversations[session_id].sdk_conversation
+            messages = []
+            for event in sdk_conv.state.events:
+                if hasattr(event, 'content'):
+                    messages.append({
+                        'role': getattr(event, 'sender', 'assistant'),
+                        'content': str(event.content)[:5000],
+                    })
+            if messages:
+                session.save_messages(messages)
+                logger.info(f"Saved {len(messages)} messages to session {session_id}")
+        
         return {
-            "status": "started",
+            "status": "completed",
             "session_id": session_id,
             "project_id": project_id,
         }
