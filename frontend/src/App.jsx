@@ -20,6 +20,7 @@ function App() {
   const [showSessions, setShowSessions] = useState(false)
   
   const pollTimerRef = useRef(null)
+  const wsRef = useRef(null)
 
   // Load projects on mount
   useEffect(() => {
@@ -30,6 +31,7 @@ function App() {
   useEffect(() => {
     return () => {
       stopPolling()
+      disconnectSSE()
     }
   }, [])
 
@@ -138,7 +140,7 @@ function App() {
     }
   }
 
-  // Send message and run agent
+  // Send message (backend executes automatically)
   const sendMessage = async (content) => {
     const sessionId = currentSession?.id || currentSession?.session_id
     if (!currentSession || !currentProject || !sessionId) {
@@ -151,8 +153,8 @@ function App() {
     setIsLoading(true)
     
     try {
-      // 1. Save message to session
-      const saveRes = await fetch(
+      // Send message - backend executes automatically in background thread
+      const res = await fetch(
         `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}/messages`,
         {
           method: 'POST',
@@ -160,31 +162,21 @@ function App() {
           body: JSON.stringify({ message: content })
         }
       )
-      console.log('Save message response:', saveRes.status)
+      console.log('Response:', res.status)
       
-      // 2. Run the agent
-      const runRes = await fetch(
-        `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}/run`,
-        { method: 'POST' }
-      )
-      console.log('Run response:', runRes.status)
-      
-      const runData = await runRes.json()
-      console.log('Run data:', runData)
-      
-      // 3. Immediately load fresh messages from backend
-      await loadSessionMessages(sessionId)
-      
-      // 4. Start polling for response
+      // Start polling (with SSE) for response
       startPolling(sessionId)
     } catch (err) {
-      console.error('Failed to run session:', err)
+      console.error('Failed to send message:', err)
       setIsLoading(false)
     }
   }
   
   // Start polling for messages
   const startPolling = (sessionId) => {
+    // Also connect to SSE for real-time updates
+    connectSSE(sessionId)
+    
     let count = 0
     const maxCount = 60
     const interval = 1000
@@ -229,6 +221,69 @@ function App() {
     }
     setIsLoading(false)
   }
+  
+  // Connect to SSE for real-time updates
+  const connectSSE = (sessionId) => {
+    // Close existing connection
+    if (wsRef.current) {
+      wsRef.current.close()
+    }
+    
+    // Determine the actual session ID
+    const actualSessionId = sessionId || currentSession?.id || currentSession?.session_id
+    if (!actualSessionId) return
+    
+    const eventSource = new EventSource(`/sse/${actualSessionId}`)
+    
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+        console.log('SSE message:', data)
+        
+        // Handle different event types
+        if (data.role === 'assistant' || data.role === 'user') {
+          // It's a message - reload from backend
+          loadSessionMessages(actualSessionId)
+        }
+      } catch (e) {
+        console.error('SSE parse error:', e)
+      }
+    }
+    
+    eventSource.addEventListener('message', (e) => {
+      const data = JSON.parse(e.data)
+      console.log('Message event:', data)
+      // Reload messages when we get a message event
+      loadSessionMessages(actualSessionId)
+    })
+    
+    eventSource.addEventListener('action', (e) => {
+      const data = JSON.parse(e.data)
+      console.log('Action event:', data)
+    })
+    
+    eventSource.addEventListener('completed', (e) => {
+      console.log('Agent completed')
+      loadSessionMessages(actualSessionId)
+      stopPolling()
+    })
+    
+    eventSource.onerror = (e) => {
+      console.log('SSE error:', e)
+      eventSource.close()
+    }
+    
+    // Store for cleanup
+    wsRef.current = eventSource
+  }
+  
+  // Disconnect SSE
+  const disconnectSSE = () => {
+    if (wsRef.current) {
+      wsRef.current.close()
+      wsRef.current = null
+    }
+  }
 
   const goBackToProjects = () => {
     stopPolling()
@@ -242,6 +297,7 @@ function App() {
 
   const goBackToSessions = () => {
     stopPolling()
+    disconnectSSE()
     setCurrentSession(null)
     setMessages([])
     setShowSessions(true)
