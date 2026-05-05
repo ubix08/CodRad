@@ -237,6 +237,20 @@ async def run_session(project_id: str, session_id: str):
         
         cm.conversations[session_id] = conv
     
+    # Load messages from session before running
+    from local_agent_server.services.session_manager import get_session_manager
+    sm = get_session_manager(pm)
+    session = sm.get_session(session_id)
+    messages = session.get_messages() if session else []
+    
+    # Add messages to conversation if any
+    if messages:
+        for msg in messages:
+            sdk_conversation.add_message(
+                role=msg.get("role", "user"),
+                content=msg.get("content", ""),
+            )
+    
     # Run the conversation
     try:
         cm.conversations[session_id].sdk_conversation.run()
