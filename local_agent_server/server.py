@@ -250,6 +250,56 @@ async def websocket_chat(websocket: WebSocket, conversation_id: str):
         await websocket.close()
         return
     
+    # Get or create conversation
+    conv = cm.get_conversation(conversation_id)
+    if not conv:
+        # Create new conversation
+        from local_agent_server.services.project_manager import get_project_manager
+        pm = get_project_manager()
+        
+        # Find project for this conversation
+        project_id = None
+        for proj in pm.list_projects():
+            workspace = pm.get_workspace_for_project(proj.id)
+            if workspace:
+                project_id = proj.id
+                break
+        
+        if not project_id:
+            await websocket.send_json({"error": "No project found"})
+            await websocket.close()
+            return
+        
+        workspace = pm.get_workspace_for_project(project_id)
+        if not workspace:
+            await websocket.send_json({"error": "Workspace not found"})
+            await websocket.close()
+            return
+        
+        from openhands.sdk import Conversation as SDKConversation
+        from local_agent_server.services.agent_factory import get_agent_factory
+        
+        factory = get_agent_factory()
+        agent = factory.create_agent(
+            api_key=cm.api_key,
+            agent_type=cm.default_agent_type,
+            enable_browser=cm.enable_browser,
+            model=cm.model,
+        )
+        
+        sdk_conv = SDKConversation(agent=agent, workspace=workspace)
+        
+        from local_agent_server.services.conversation_manager import Conversation as Conv
+        conv = Conv(
+            id=conversation_id,
+            workspace_dir=str(workspace.working_dir),
+            agent_type=cm.default_agent_type,
+            enable_browser=cm.enable_browser,
+            agent=agent,
+            sdk_conversation=sdk_conv,
+        )
+        cm.conversations[conversation_id] = conv
+    
     try:
         # Send initial state
         await websocket.send_json({
@@ -260,8 +310,33 @@ async def websocket_chat(websocket: WebSocket, conversation_id: str):
         # Handle messages
         while True:
             data = await websocket.receive_text()
-            # Process message...
-            await websocket.send_json({"type": "ack"})
+            
+            try:
+                message_data = json.loads(data)
+                message = message_data.get("content") or message_data.get("message")
+            except:
+                message = data
+            
+            if not message:
+                await websocket.send_json({"type": "ack"})
+                continue
+            
+            # Run the agent
+            try:
+                conv.sdk_conversation.add_message(role="user", content=message)
+                conv.sdk_conversation.run()
+                
+                # Send response
+                await websocket.send_json({
+                    "type": "response",
+                    "message": "Agent completed",
+                })
+            except Exception as e:
+                await websocket.send_json({
+                    "type": "error",
+                    "error": str(e),
+                })
+                
     except WebSocketDisconnect:
         pass
 
