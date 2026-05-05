@@ -240,8 +240,9 @@ function App() {
       timestamp: new Date().toISOString()
     }])
 
-    // Save message to session
+    // Send message
     if (currentSession && currentProject && sessionId) {
+      // Save and run via REST API
       try {
         await fetch(
           `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}/messages`,
@@ -251,30 +252,50 @@ function App() {
             body: JSON.stringify({ message: content })
           }
         )
-      } catch (err) {
-        console.error('Failed to save message:', err)
-      }
-    }
-
-    // Send via WebSocket if connected
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({
-        type: 'message',
-        content
-      }))
-      setIsLoading(true)
-    } else if (currentSession && currentProject && sessionId) {
-      // Fallback: start the agent
-      try {
+        // Run the agent
         await fetch(
           `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}/run`,
           { method: 'POST' }
         )
         setIsLoading(true)
+        
+        // Poll for results
+        pollMessages()
       } catch (err) {
         console.error('Failed to run session:', err)
       }
     }
+  }
+  
+  // Poll for messages while loading
+  const pollMessages = () => {
+    const sessionId = currentSession?.id || currentSession?.session_id
+    if (!currentProject || !sessionId) return
+    
+    let pollCount = 0
+    const maxPolls = 20 // Stop after 60 seconds
+    
+    const interval = setInterval(async () => {
+      pollCount++
+      try {
+        const res = await fetch(
+          `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}`
+        )
+        const data = await res.json()
+        setMessages(data.messages || [])
+        
+        // Stop polling after max attempts or if we got new assistant message
+        if (pollCount >= maxPolls) {
+          clearInterval(window.messagePollingInterval)
+          setIsLoading(false)
+        }
+      } catch (err) {
+        console.error('Failed to poll messages:', err)
+      }
+    }, 3000)
+    
+    // Store interval to clear later
+    window.messagePollingInterval = interval
   }
 
   const goBackToProjects = () => {
