@@ -82,14 +82,18 @@ class AgentFactory:
         """Create an LLM instance with full configuration."""
         # For OpenRouter, litellm handles routing automatically - don't pass base_url
         effective_model = model or self.default_model
+        
+        # Get base_url from parameter or environment
+        final_base_url = base_url or os.getenv("LLM_BASE_URL", "") or os.getenv("OPENAI_BASE_URL", "")
+        
         if effective_model and effective_model.startswith("openrouter/"):
-            base_url = ""  # Empty allows litellm to route automatically
+            final_base_url = ""  # Empty allows litellm to route automatically
         
         return LLM(
             usage_id="local-agent",
             model=effective_model,
             api_key=SecretStr(api_key),
-            base_url=base_url or "",
+            base_url=final_base_url,
         )
     
     def get_tools(self, agent_type: AgentType, enable_browser: bool = True):
