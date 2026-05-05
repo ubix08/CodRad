@@ -171,6 +171,7 @@ class AgentFactory:
         agent_type: AgentType = AgentType.DEFAULT,
         enable_browser: Optional[bool] = None,
         model: Optional[str] = None,
+        base_url: Optional[str] = None,
         custom_system_prompt: Optional[str] = None,
     ) -> Agent:
         """Create an OpenHands agent with exact same config as original.
@@ -181,9 +182,9 @@ class AgentFactory:
         """
         enable_browser = enable_browser if enable_browser is not None else self.default_enable_browser
         
-        # 1. Create LLM
-        llm = self.create_llm(api_key, model)
-        logger.info(f"Created LLM: model={model or self.default_model}")
+        # 1. Create LLM with base_url
+        llm = self.create_llm(api_key, model, base_url)
+        logger.info(f"Created LLM: model={model or self.default_model}, base_url={base_url}")
         
         # 2. Get tools - EXACT same as original (line 1405)
         tools = self.get_tools(agent_type, enable_browser)
