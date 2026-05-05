@@ -233,8 +233,6 @@ function App() {
     // Get session ID - handle both id and session_id
     const sessionId = currentSession?.id || currentSession?.session_id
     
-    if (!currentSession || !currentProject || !sessionId) return
-    
     // Add user message immediately
     setMessages(prev => [...prev, {
       role: 'user',
@@ -242,59 +240,62 @@ function App() {
       timestamp: new Date().toISOString()
     }])
 
-    setIsLoading(true)
-    
-    // Use REST API (works without WebSocket)
-    try {
-      // 1. Save message
-      await fetch(
-        `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}/messages`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: content })
-        }
-      )
-      // 2. Run agent
-      await fetch(
-        `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}/run`,
-        { method: 'POST' }
-      )
-      // 3. Poll for response
-      startPollingForMessages(sessionId)
-    } catch (err) {
-      console.error('Failed to run session:', err)
-      setIsLoading(false)
+    // Send message
+    if (currentSession && currentProject && sessionId) {
+      // Save and run via REST API
+      try {
+        await fetch(
+          `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}/messages`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: content })
+          }
+        )
+        // Run the agent
+        await fetch(
+          `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}/run`,
+          { method: 'POST' }
+        )
+        setIsLoading(true)
+        
+        // Poll for results
+        pollMessages()
+      } catch (err) {
+        console.error('Failed to run session:', err)
+      }
     }
   }
   
-  // Poll for messages
-  const startPollingForMessages = (sessionId) => {
-    let count = 0
-    const maxCount = 30
+  // Poll for messages while loading
+  const pollMessages = () => {
+    const sessionId = currentSession?.id || currentSession?.session_id
+    if (!currentProject || !sessionId) return
     
-    const timer = setInterval(async () => {
-      count++
+    let pollCount = 0
+    const maxPolls = 20 // Stop after 60 seconds
+    
+    const interval = setInterval(async () => {
+      pollCount++
       try {
         const res = await fetch(
           `${API_BASE}/projects/${currentProject.id}/sessions/${sessionId}`
         )
         const data = await res.json()
-        const newMsgs = data.messages || []
+        setMessages(data.messages || [])
         
-        if (newMsgs.length > messages.length) {
-          setMessages(newMsgs)
-        }
-        
-        // Stop if got assistant response or timeout
-        if (newMsgs.some(m => m.role === 'assistant') || count >= maxCount) {
-          clearInterval(timer)
+        // Stop polling after max attempts or if we got new assistant message
+        if (pollCount >= maxPolls) {
+          clearInterval(window.messagePollingInterval)
           setIsLoading(false)
         }
       } catch (err) {
-        console.error('Poll error:', err)
+        console.error('Failed to poll messages:', err)
       }
-    }, 1000)
+    }, 3000)
+    
+    // Store interval to clear later
+    window.messagePollingInterval = interval
   }
 
   const goBackToProjects = () => {
@@ -336,7 +337,7 @@ function App() {
             <MessageList messages={messages} isLoading={isLoading} />
             <ChatInput 
               onSend={sendMessage} 
-              disabled={isLoading}
+              disabled={isLoading || !connected}
             />
           </>
         ) : (
