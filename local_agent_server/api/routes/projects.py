@@ -261,7 +261,7 @@ async def run_session(project_id: str, session_id: str):
         
         # Add initial message if exists
         if initial_message:
-            sdk_conversation.add_message(role="user", content=initial_message)
+            sdk_conversation.send_message(role="user", content=initial_message)
         
         # Create conversation in manager
         from local_agent_server.services.conversation_manager import Conversation as Conv
@@ -313,8 +313,8 @@ async def send_message(project_id: str, session_id: str, request: SendMessageReq
     conv = cm.get_conversation(session_id)
     
     if conv and conv.sdk_conversation:
-        # SDK-native way: add message to conversation
-        conv.sdk_conversation.add_message(role="user", content=request.message)
+        # SDK-native way: send message to conversation
+        conv.sdk_conversation.send_message(role="user", content=request.message)
     
     return {
         "status": "message_added",
