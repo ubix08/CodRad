@@ -132,10 +132,19 @@ async def create_session(project_id: str, request: CreateSessionRequest):
     
     # Also create SDK conversation immediately so /messages works
     cm = get_conversation_manager()
+    
+    # Check API key
+    if not cm.api_key:
+        return {
+            "session_id": session.session_id,
+            "project_id": project_id,
+            "title": request.initial_message[:50] if request.initial_message else "New Session",
+            "warning": "No API key - agent won't run"
+        }
+    
     workspace = pm.get_workspace_for_project(project_id)
     
-    # Get workspace for project
-    if workspace:
+    if workspace and cm.api_key:
         from openhands.sdk import Conversation as SDKConversation
         from local_agent_server.services.agent_factory import get_agent_factory
         
@@ -161,7 +170,7 @@ async def create_session(project_id: str, request: CreateSessionRequest):
         from local_agent_server.services.conversation_manager import Conversation as Conv
         conv = Conv(
             id=session.session_id,
-            workspace_dir=str(workspace.working_dir),
+            workspace_dir=str(workspace.path),
             agent_type=cm.default_agent_type,
             enable_browser=cm.enable_browser,
             agent=agent,
@@ -263,26 +272,12 @@ async def run_session(project_id: str, session_id: str):
             content={"error": "No API key configured"}
         )
     
-    # Create or get conversation for this session
-    # Use session_id as conversation_id
+    # Check if conversation already exists (from create_session)
     existing_conv = cm.get_conversation(session_id)
     
-    # Get session to check for initial message
-    pm = get_project_manager()
-    sm = get_session_manager(pm)
-    session = sm.get_session(project_id, session_id)
-    initial_message = ""
-    if session:
-        msgs = session.get_messages()
-        if msgs:
-            # Get first user message as initial
-            for m in msgs:
-                if m.get('role') == 'user':
-                    initial_message = m.get('content', '')
-                    break
-    
     if not existing_conv:
-        # Get project workspace
+        # Need to create SDK conversation
+        pm = get_project_manager()
         project = pm.get_project(project_id)
         
         if not project.exists:
@@ -291,7 +286,6 @@ async def run_session(project_id: str, session_id: str):
                 content={"error": "Project not found"}
             )
         
-        # Get workspace for project
         workspace = pm.get_workspace_for_project(project_id)
         
         if not workspace:
@@ -300,7 +294,6 @@ async def run_session(project_id: str, session_id: str):
                 content={"error": "Project workspace not found"}
             )
         
-        # Create agent and conversation
         from openhands.sdk import Conversation as SDKConversation
         from local_agent_server.services.agent_factory import get_agent_factory
         
@@ -318,10 +311,6 @@ async def run_session(project_id: str, session_id: str):
             workspace=workspace,
         )
         
-        # Add initial message if exists
-        if initial_message:
-            sdk_conversation.send_message(message=initial_message)
-        
         # Create conversation in manager
         from local_agent_server.services.conversation_manager import Conversation as Conv
         conv = Conv(
@@ -332,12 +321,12 @@ async def run_session(project_id: str, session_id: str):
             agent=agent,
             sdk_conversation=sdk_conversation,
         )
-        
         cm.conversations[session_id] = conv
+        existing_conv = conv
     
-    # Run the conversation - SDK stores messages natively in state.events
+    # Run the conversation
     try:
-        cm.conversations[session_id].sdk_conversation.run()
+        existing_conv.sdk_conversation.run()
         
         return {
             "status": "completed",
