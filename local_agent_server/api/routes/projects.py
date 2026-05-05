@@ -208,10 +208,22 @@ async def run_session(project_id: str, session_id: str):
     # Use session_id as conversation_id
     existing_conv = cm.get_conversation(session_id)
     
+    # Get session to check for initial message
+    pm = get_project_manager()
+    sm = get_session_manager(pm)
+    session = sm.get_session(project_id, session_id)
+    initial_message = ""
+    if session:
+        msgs = session.get_messages()
+        if msgs:
+            # Get first user message as initial
+            for m in msgs:
+                if m.get('role') == 'user':
+                    initial_message = m.get('content', '')
+                    break
+    
     if not existing_conv:
         # Get project workspace
-        from local_agent_server.services.project_manager import get_project_manager
-        pm = get_project_manager()
         project = pm.get_project(project_id)
         
         if not project.exists:
@@ -247,6 +259,10 @@ async def run_session(project_id: str, session_id: str):
             workspace=workspace,
         )
         
+        # Add initial message if exists
+        if initial_message:
+            sdk_conversation.add_message(role="user", content=initial_message)
+        
         # Create conversation in manager
         from local_agent_server.services.conversation_manager import Conversation as Conv
         conv = Conv(
@@ -279,7 +295,8 @@ async def run_session(project_id: str, session_id: str):
 # Send message to session
 @router.post("/{project_id}/sessions/{session_id}/messages")
 async def send_message(project_id: str, session_id: str, request: SendMessageRequest):
-    """Send a message to a session."""
+    """Send a message to a session - adds to SDK conversation."""
+    # First add to session for persistence
     pm = get_project_manager()
     sm = get_session_manager(pm)
     session = sm.get_session(project_id, session_id)
@@ -287,8 +304,17 @@ async def send_message(project_id: str, session_id: str, request: SendMessageReq
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     
-    # Add message to session
+    # Add to session file
     session.add_message("user", request.message)
+    
+    # Also add to SDK conversation if it exists
+    from local_agent_server.services.conversation_manager import get_conversation_manager
+    cm = get_conversation_manager()
+    conv = cm.get_conversation(session_id)
+    
+    if conv and conv.sdk_conversation:
+        # SDK-native way: add message to conversation
+        conv.sdk_conversation.add_message(role="user", content=request.message)
     
     return {
         "status": "message_added",
