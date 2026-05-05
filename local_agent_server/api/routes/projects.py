@@ -139,48 +139,43 @@ async def create_session(project_id: str, request: CreateSessionRequest):
 @router.get("/{project_id}/sessions/{session_id}")
 async def get_session(project_id: str, session_id: str):
     """Get session details and messages from SDK conversation."""
-    # Get from conversation manager (SDK native)
+    # Try conversation manager first
     from local_agent_server.services.conversation_manager import get_conversation_manager
     cm = get_conversation_manager()
     conv = cm.get_conversation(session_id)
     
+    # If no conversation in manager, that's okay - return empty
     if not conv or not conv.sdk_conversation:
-        raise HTTPException(status_code=404, detail="Session not found")
+        return {
+            "session_id": session_id,
+            "project_id": project_id,
+            "workspace_dir": "",
+            "messages": [],
+        }
     
     # Get messages from SDK state.events
     messages = []
     try:
-        events = conv.sdk_conversation.state.events
-        logger.info(f"Session {session_id} has {len(events)} events")
+        sdk_conv = conv.sdk_conversation
+        events = list(sdk_conv.state.events) if hasattr(sdk_conv.state, 'events') else []
         
         for event in events:
-            # Log event type for debugging
-            event_type = type(event).__name__
-            
-            # Different event types have different attributes
+            content = None
             if hasattr(event, 'content'):
                 content = str(event.content)[:5000]
             elif hasattr(event, 'message'):
                 content = str(event.message)[:5000]
-            elif hasattr(event, 'action'):
-                content = f"Action: {event.action}"
-            else:
-                content = f"[{event_type}]"
             
-            # Determine role
-            if hasattr(event, 'role'):
+            if not content:
+                continue
+            
+            role = 'assistant'
+            if hasattr(event, 'sender'):
+                role = 'user' if event.sender == 'user' else 'assistant'
+            elif hasattr(event, 'role'):
                 role = event.role
-            elif hasattr(event, 'sender'):
-                sender = event.sender
-                role = 'user' if sender == 'user' else 'assistant'
-            else:
-                role = 'assistant'
             
-            if content and content != f"[{event_type}]":
-                messages.append({
-                    'role': role,
-                    'content': content,
-                })
+            messages.append({'role': role, 'content': content})
     except Exception as e:
         logger.error(f"Error getting messages: {e}")
     
